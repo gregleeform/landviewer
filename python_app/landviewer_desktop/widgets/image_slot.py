@@ -34,6 +34,11 @@ class ImageSlotWidget(QFrame):
             "QLabel { border: 1px dashed #555; padding: 12px; color: #bbb; }"
         )
 
+        self._filename_label = QLabel("")
+        self._filename_label.setObjectName("imageSlotFilename")
+        self._filename_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._filename_label.setWordWrap(True)
+
         self._select_button = QPushButton("Choose image…")
         self._clear_button = QPushButton("Remove")
         self._clear_button.setEnabled(False)
@@ -51,6 +56,8 @@ class ImageSlotWidget(QFrame):
         layout.addWidget(self._description_label)
         layout.addSpacing(4)
         layout.addWidget(self._preview_label, stretch=1)
+        layout.addSpacing(6)
+        layout.addWidget(self._filename_label)
         layout.addSpacing(8)
         layout.addLayout(button_row)
         self.setLayout(layout)
@@ -62,8 +69,10 @@ class ImageSlotWidget(QFrame):
     def set_preview(self, pixmap: QPixmap, filename: str) -> None:
         """Show a preview pixmap and update button state."""
         self._source_pixmap = pixmap
+        self._preview_label.setText("")
         self._update_preview_pixmap()
-        self._preview_label.setText(filename)
+        self._filename_label.setText(filename)
+        self._preview_label.setToolTip(filename)
         self._clear_button.setEnabled(True)
 
     def clear_preview(self) -> None:
@@ -71,6 +80,8 @@ class ImageSlotWidget(QFrame):
         self._source_pixmap = None
         self._preview_label.setPixmap(QPixmap())
         self._preview_label.setText("No image selected")
+        self._preview_label.setToolTip("")
+        self._filename_label.setText("")
         self._clear_button.setEnabled(False)
 
     def resizeEvent(self, event):  # type: ignore[override]
@@ -81,11 +92,13 @@ class ImageSlotWidget(QFrame):
     def _update_preview_pixmap(self) -> None:
         if not self._source_pixmap:
             return
-        target_size = self._preview_label.size() - QSize(12, 12)
-        target_size.setWidth(max(target_size.width(), 1))
-        target_size.setHeight(max(target_size.height(), 1))
+        contents_size = self._preview_label.contentsRect().size()
+        if contents_size.width() <= 0 or contents_size.height() <= 0:
+            contents_size = self._preview_label.size()
+        contents_size.setWidth(max(contents_size.width(), 1))
+        contents_size.setHeight(max(contents_size.height(), 1))
         scaled = self._source_pixmap.scaled(
-            target_size,
+            contents_size,
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )

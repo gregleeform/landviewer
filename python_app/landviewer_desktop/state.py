@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from PIL import Image
 
@@ -24,12 +24,16 @@ class ImageSelection:
     path: Optional[Path] = None
     image: Optional[Image.Image] = None
     resized_for_performance: bool = False
+    cropped_image: Optional[Image.Image] = None
+    crop_rect: Optional[Tuple[int, int, int, int]] = None
 
     def clear(self) -> None:
         """Resets the stored data for the slot."""
         self.path = None
         self.image = None
         self.resized_for_performance = False
+        self.cropped_image = None
+        self.crop_rect = None
 
 
 @dataclass(slots=True)

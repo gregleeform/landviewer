@@ -25,7 +25,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self._stack)
 
         self._upload_view = UploadView(self._state)
-        self._crop_view = CropView()
+        self._crop_view = CropView(self._state)
         self._editor_view = EditorView()
 
         self._stack.addWidget(self._upload_view)
@@ -81,6 +81,9 @@ class MainWindow(QMainWindow):
         if stage is AppStage.UPLOAD:
             self._upload_view.refresh()
             self._start_over_action.setVisible(False)
+        elif stage is AppStage.CROP:
+            self._crop_view.refresh()
+            self._start_over_action.setVisible(True)
         else:
             self._start_over_action.setVisible(True)
 

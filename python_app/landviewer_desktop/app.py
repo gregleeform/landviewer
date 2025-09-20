@@ -67,6 +67,21 @@ def _apply_dark_theme(app: QApplication) -> None:
             font-weight: 600;
         }
 
+        QLabel#imageSlotFilename {
+            font-size: 12px;
+            color: #a9afb9;
+        }
+
+        QLabel#cropSelectionLabel {
+            font-size: 12px;
+            color: #a9afb9;
+        }
+
+        QGraphicsView {
+            border: 1px solid #2f3339;
+            background-color: #111827;
+        }
+
         QPushButton {
             background-color: #2b2f35;
             color: #f0f0f0;
