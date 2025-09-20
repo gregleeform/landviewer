@@ -1,0 +1,5 @@
+{
+  "name": "Copy of LandViewer: Cadastral Overlay_v02",
+  "description": "An application to process a cadastral map image, extract a specific land plot, and overlay it onto a field photograph with perspective adjustments.",
+  "requestFramePermissions": []
+}
