@@ -169,7 +169,7 @@ class UploadView(QWidget):
         selection.resized_for_performance = resized
         selection.cropped_image = None
         selection.crop_rect = None
-        selection.rotation = 0
+        selection.rotation = 0.0
 
         pixmap = image_io.image_to_qpixmap(image)
         slot_widget.set_preview(pixmap, path.name)

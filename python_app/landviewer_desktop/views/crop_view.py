@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -220,28 +221,40 @@ class CropView(QWidget):
 
         self._back_button = QPushButton("Back to upload")
         self._reset_button = QPushButton("Clear selection")
-        self._rotate_left_button = QPushButton("Rotate left")
-        self._rotate_right_button = QPushButton("Rotate right")
         self._confirm_button = QPushButton("Use selection")
         self._confirm_button.setEnabled(False)
 
+        self._rotation_slider = QSlider(Qt.Orientation.Horizontal)
+        self._rotation_slider.setRange(-180, 180)
+        self._rotation_slider.setSingleStep(1)
+        self._rotation_slider.setPageStep(10)
+        self._rotation_slider.setTickInterval(15)
+        self._rotation_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._rotation_slider.setEnabled(False)
+        self._rotation_value_label = QLabel("+0°")
+        self._rotation_value_label.setObjectName("cropRotationValueLabel")
+
         self._back_button.clicked.connect(self.back_requested.emit)
         self._reset_button.clicked.connect(self._view.clear_selection)
-        self._rotate_left_button.clicked.connect(self._rotate_left)
-        self._rotate_right_button.clicked.connect(self._rotate_right)
         self._confirm_button.clicked.connect(self._commit_crop)
+        self._rotation_slider.valueChanged.connect(self._rotation_slider_changed)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._instruction_label)
         layout.addWidget(self._view, stretch=1)
+        layout.addSpacing(8)
+        rotation_row = QHBoxLayout()
+        rotation_caption = QLabel("Rotation")
+        rotation_row.addWidget(rotation_caption)
+        rotation_row.addWidget(self._rotation_slider, stretch=1)
+        rotation_row.addWidget(self._rotation_value_label)
+        layout.addLayout(rotation_row)
         layout.addSpacing(8)
         layout.addWidget(self._selection_label)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self._back_button)
         button_row.addWidget(self._reset_button)
-        button_row.addWidget(self._rotate_left_button)
-        button_row.addWidget(self._rotate_right_button)
         button_row.addStretch(1)
         button_row.addWidget(self._confirm_button)
         layout.addLayout(button_row)
@@ -259,21 +272,29 @@ class CropView(QWidget):
             self._view.set_pixmap(None)
             self._view.setEnabled(False)
             self._confirm_button.setEnabled(False)
-            self._rotate_left_button.setEnabled(False)
-            self._rotate_right_button.setEnabled(False)
             self._current_rotated_image = None
             self._selection_label.setText(
                 "Upload a cadastral map on the previous screen to crop it."
             )
+            self._rotation_slider.blockSignals(True)
+            self._rotation_slider.setValue(0)
+            self._rotation_slider.blockSignals(False)
+            self._rotation_slider.setEnabled(False)
+            self._rotation_value_label.setText("+0°")
             return
 
-        rotated_image = image_io.rotate_image(image, cadastral.rotation)
+        rotation_degrees = float(cadastral.rotation)
+        rotated_image = image_io.rotate_image(image, rotation_degrees)
         self._current_rotated_image = rotated_image
         pixmap = image_io.image_to_qpixmap(rotated_image)
         self._view.setEnabled(True)
         self._view.set_pixmap(pixmap)
-        self._rotate_left_button.setEnabled(True)
-        self._rotate_right_button.setEnabled(True)
+        slider_value = int(round(rotation_degrees))
+        self._rotation_slider.blockSignals(True)
+        self._rotation_slider.setValue(slider_value)
+        self._rotation_slider.blockSignals(False)
+        self._rotation_slider.setEnabled(True)
+        self._rotation_value_label.setText(f"{slider_value:+d}°")
 
         if cadastral.crop_rect:
             left, top, right, bottom = cadastral.crop_rect
@@ -308,18 +329,17 @@ class CropView(QWidget):
         self._selection_label.setText(f"Selection: {width} × {height}px")
         self._confirm_button.setEnabled(True)
 
-    def _rotate_left(self) -> None:
-        self._change_rotation(-1)
-
-    def _rotate_right(self) -> None:
-        self._change_rotation(1)
-
-    def _change_rotation(self, delta: int) -> None:
+    def _rotation_slider_changed(self, value: int) -> None:
+        self._rotation_value_label.setText(f"{value:+d}°")
         selection = self._state.cadastral
         if selection.image is None:
             return
 
-        selection.rotation = (selection.rotation + delta) % 4
+        degrees = float(value)
+        if math.isclose(selection.rotation, degrees, abs_tol=0.01):
+            return
+
+        selection.rotation = degrees
         selection.cropped_image = None
         selection.crop_rect = None
         self._current_rotated_image = None

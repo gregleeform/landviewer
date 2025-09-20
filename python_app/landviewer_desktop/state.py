@@ -26,7 +26,7 @@ class ImageSelection:
     resized_for_performance: bool = False
     cropped_image: Optional[Image.Image] = None
     crop_rect: Optional[Tuple[int, int, int, int]] = None
-    rotation: int = 0
+    rotation: float = 0.0
 
     def clear(self) -> None:
         """Resets the stored data for the slot."""
@@ -35,7 +35,7 @@ class ImageSelection:
         self.resized_for_performance = False
         self.cropped_image = None
         self.crop_rect = None
-        self.rotation = 0
+        self.rotation = 0.0
 
 
 @dataclass(slots=True)
