@@ -77,6 +77,17 @@ def _apply_dark_theme(app: QApplication) -> None:
             color: #a9afb9;
         }
 
+        QLabel#editorInfoLabel {
+            font-size: 12px;
+            color: #a9afb9;
+        }
+
+        QLabel#overlayOpacityValue {
+            font-size: 12px;
+            color: #a9afb9;
+            min-width: 48px;
+        }
+
         QGraphicsView {
             border: 1px solid #2f3339;
             background-color: #111827;

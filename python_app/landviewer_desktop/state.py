@@ -39,15 +39,33 @@ class ImageSelection:
 
 
 @dataclass(slots=True)
+class OverlaySettings:
+    """Stores overlay visibility and alignment preferences."""
+
+    show_overlay: bool = True
+    opacity: float = 0.65
+    manual_points: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
+
+    def reset(self) -> None:
+        """Restore default overlay configuration."""
+
+        self.show_overlay = True
+        self.opacity = 0.65
+        self.manual_points = None
+
+
+@dataclass(slots=True)
 class AppState:
     """Container object for the global application state."""
 
     stage: AppStage = AppStage.UPLOAD
     cadastral: ImageSelection = field(default_factory=ImageSelection)
     photo: ImageSelection = field(default_factory=ImageSelection)
+    overlay: OverlaySettings = field(default_factory=OverlaySettings)
 
     def reset(self) -> None:
         """Resets the application to its initial state."""
         self.stage = AppStage.UPLOAD
         self.cadastral.clear()
         self.photo.clear()
+        self.overlay.reset()

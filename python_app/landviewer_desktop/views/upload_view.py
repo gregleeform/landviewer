@@ -114,11 +114,13 @@ class UploadView(QWidget):
     def _clear_cadastral(self) -> None:
         self._state.cadastral.clear()
         self._cadastral_slot.clear_preview()
+        self._reset_overlay_alignment()
         self._update_start_button()
 
     def _clear_photo(self) -> None:
         self._state.photo.clear()
         self._photo_slot.clear_preview()
+        self._reset_overlay_alignment()
         self._update_start_button()
 
     # ------------------------------------------------------------------
@@ -170,6 +172,7 @@ class UploadView(QWidget):
         selection.cropped_image = None
         selection.crop_rect = None
         selection.rotation = 0.0
+        self._reset_overlay_alignment()
 
         pixmap = image_io.image_to_qpixmap(image)
         slot_widget.set_preview(pixmap, path.name)
@@ -178,3 +181,8 @@ class UploadView(QWidget):
     def _update_start_button(self) -> None:
         ready = bool(self._state.cadastral.image and self._state.photo.image)
         self._start_button.setEnabled(ready)
+
+    def _reset_overlay_alignment(self) -> None:
+        """Clear any stored overlay alignment when images change."""
+
+        self._state.overlay.manual_points = None

@@ -22,8 +22,9 @@ View your app in AI Studio: https://ai.studio/apps/drive/11PQyrPZPjrgqLpjauM5lbU
 ## Python Desktop Prototype
 
 The `python_app/` directory contains an in-progress PySide6 port of the Landviewer app.
-The current prototype reproduces the upload workflow and offers an interactive cadastral crop
-workspace while the editor stage remains a placeholder for upcoming iterations.
+The current prototype reproduces the upload workflow, offers an interactive cadastral crop
+workspace, and now introduces the manual pinning editor so you can align the cadastral overlay
+on top of the field photo (automatic pinning will follow in a later iteration).
 
 ### Run the desktop prototype
 

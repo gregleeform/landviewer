@@ -26,7 +26,7 @@ class MainWindow(QMainWindow):
 
         self._upload_view = UploadView(self._state)
         self._crop_view = CropView(self._state)
-        self._editor_view = EditorView()
+        self._editor_view = EditorView(self._state)
 
         self._stack.addWidget(self._upload_view)
         self._stack.addWidget(self._crop_view)
@@ -85,6 +85,7 @@ class MainWindow(QMainWindow):
             self._crop_view.refresh()
             self._start_over_action.setVisible(True)
         else:
+            self._editor_view.refresh()
             self._start_over_action.setVisible(True)
 
     def _handle_restart(self) -> None:
