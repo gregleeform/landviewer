@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +30,10 @@ class ImageSlotWidget(QFrame):
         self._description_label.setWordWrap(True)
         self._preview_label = QLabel("No image selected")
         self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_label.setMinimumHeight(160)
+        self._preview_label.setMinimumHeight(320)
+        self._preview_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
         self._preview_label.setStyleSheet(
             "QLabel { border: 1px dashed #555; padding: 12px; color: #bbb; }"
         )

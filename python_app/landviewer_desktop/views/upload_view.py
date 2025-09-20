@@ -70,11 +70,17 @@ class UploadView(QWidget):
     # ------------------------------------------------------------------
     def refresh(self) -> None:
         """Synchronise the widget state with ``AppState``."""
-        cadastral_image = self._state.cadastral.cropped_image or self._state.cadastral.image
-        if self._state.cadastral.path and cadastral_image:
-            pixmap = image_io.image_to_qpixmap(cadastral_image)
-            filename = self._state.cadastral.path.name
-            if self._state.cadastral.crop_rect:
+        cadastral = self._state.cadastral
+        if cadastral.path and cadastral.image:
+            if cadastral.cropped_image:
+                display_image = cadastral.cropped_image
+            else:
+                display_image = image_io.rotate_image(
+                    cadastral.image, cadastral.rotation
+                )
+            pixmap = image_io.image_to_qpixmap(display_image)
+            filename = cadastral.path.name
+            if cadastral.crop_rect:
                 filename = f"{filename} (cropped)"
             self._cadastral_slot.set_preview(pixmap, filename)
         else:
@@ -163,6 +169,7 @@ class UploadView(QWidget):
         selection.resized_for_performance = resized
         selection.cropped_image = None
         selection.crop_rect = None
+        selection.rotation = 0
 
         pixmap = image_io.image_to_qpixmap(image)
         slot_widget.set_preview(pixmap, path.name)

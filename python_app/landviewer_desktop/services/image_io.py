@@ -35,6 +35,21 @@ def resized_copy(
     return image.resize(new_size, resample=resample)
 
 
+def rotate_image(image: Image.Image, quarter_turns: int) -> Image.Image:
+    """Rotate ``image`` clockwise by ``quarter_turns`` multiples of 90°."""
+
+    normalized = quarter_turns % 4
+    if normalized == 0:
+        return image
+
+    transpose_map = {
+        1: Image.Transpose.ROTATE_270,
+        2: Image.Transpose.ROTATE_180,
+        3: Image.Transpose.ROTATE_90,
+    }
+    return image.transpose(transpose_map[normalized])
+
+
 def image_to_qpixmap(image: Image.Image):
     """Convert a Pillow image into a QPixmap for display."""
     from PySide6.QtGui import QImage, QPixmap

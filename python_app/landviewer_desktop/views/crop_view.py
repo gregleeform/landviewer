@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from PIL import Image
+
 from landviewer_desktop.services import image_io
 from landviewer_desktop.state import AppState
 
@@ -200,6 +202,7 @@ class CropView(QWidget):
     def __init__(self, state: AppState, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._state = state
+        self._current_rotated_image: Optional[Image.Image] = None
 
         self._instruction_label = QLabel(
             self._INSTRUCTION_TEMPLATE.format(min_size=self.MIN_CROP_PIXELS)
@@ -217,11 +220,15 @@ class CropView(QWidget):
 
         self._back_button = QPushButton("Back to upload")
         self._reset_button = QPushButton("Clear selection")
+        self._rotate_left_button = QPushButton("Rotate left")
+        self._rotate_right_button = QPushButton("Rotate right")
         self._confirm_button = QPushButton("Use selection")
         self._confirm_button.setEnabled(False)
 
         self._back_button.clicked.connect(self.back_requested.emit)
         self._reset_button.clicked.connect(self._view.clear_selection)
+        self._rotate_left_button.clicked.connect(self._rotate_left)
+        self._rotate_right_button.clicked.connect(self._rotate_right)
         self._confirm_button.clicked.connect(self._commit_crop)
 
         layout = QVBoxLayout(self)
@@ -233,6 +240,8 @@ class CropView(QWidget):
         button_row = QHBoxLayout()
         button_row.addWidget(self._back_button)
         button_row.addWidget(self._reset_button)
+        button_row.addWidget(self._rotate_left_button)
+        button_row.addWidget(self._rotate_right_button)
         button_row.addStretch(1)
         button_row.addWidget(self._confirm_button)
         layout.addLayout(button_row)
@@ -250,14 +259,21 @@ class CropView(QWidget):
             self._view.set_pixmap(None)
             self._view.setEnabled(False)
             self._confirm_button.setEnabled(False)
+            self._rotate_left_button.setEnabled(False)
+            self._rotate_right_button.setEnabled(False)
+            self._current_rotated_image = None
             self._selection_label.setText(
                 "Upload a cadastral map on the previous screen to crop it."
             )
             return
 
-        pixmap = image_io.image_to_qpixmap(image)
+        rotated_image = image_io.rotate_image(image, cadastral.rotation)
+        self._current_rotated_image = rotated_image
+        pixmap = image_io.image_to_qpixmap(rotated_image)
         self._view.setEnabled(True)
         self._view.set_pixmap(pixmap)
+        self._rotate_left_button.setEnabled(True)
+        self._rotate_right_button.setEnabled(True)
 
         if cadastral.crop_rect:
             left, top, right, bottom = cadastral.crop_rect
@@ -292,26 +308,49 @@ class CropView(QWidget):
         self._selection_label.setText(f"Selection: {width} × {height}px")
         self._confirm_button.setEnabled(True)
 
+    def _rotate_left(self) -> None:
+        self._change_rotation(-1)
+
+    def _rotate_right(self) -> None:
+        self._change_rotation(1)
+
+    def _change_rotation(self, delta: int) -> None:
+        selection = self._state.cadastral
+        if selection.image is None:
+            return
+
+        selection.rotation = (selection.rotation + delta) % 4
+        selection.cropped_image = None
+        selection.crop_rect = None
+        self._current_rotated_image = None
+        self._view.clear_selection()
+        self.refresh()
+
     def _commit_crop(self) -> None:
         """Persist the selected crop to ``AppState`` and advance to the editor."""
 
         rect = self._view.selection_rect()
-        image = self._state.cadastral.image
+        base_image = self._state.cadastral.image
 
-        if rect is None or image is None:
+        if rect is None or base_image is None:
             return
 
         left = max(0, math.floor(rect.left()))
         top = max(0, math.floor(rect.top()))
-        right = min(image.width, math.ceil(rect.right()))
-        bottom = min(image.height, math.ceil(rect.bottom()))
+        rotation = self._state.cadastral.rotation
+        rotated_image = self._current_rotated_image or image_io.rotate_image(
+            base_image, rotation
+        )
+        max_width, max_height = rotated_image.size
+        right = min(max_width, math.ceil(rect.right()))
+        bottom = min(max_height, math.ceil(rect.bottom()))
 
         width = right - left
         height = bottom - top
         if width < self.MIN_CROP_PIXELS or height < self.MIN_CROP_PIXELS:
             return
 
-        cropped = image.crop((left, top, right, bottom))
+        cropped = rotated_image.crop((left, top, right, bottom))
         self._state.cadastral.cropped_image = cropped
         self._state.cadastral.crop_rect = (left, top, right, bottom)
 
