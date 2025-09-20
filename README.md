@@ -18,3 +18,21 @@ View your app in AI Studio: https://ai.studio/apps/drive/11PQyrPZPjrgqLpjauM5lbU
 2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
 3. Run the app:
    `npm run dev`
+
+## Python Desktop Prototype
+
+The `python_app/` directory contains an in-progress PySide6 port of the Landviewer app.
+The current prototype focuses on reproducing the upload workflow with placeholders for the
+subsequent crop and editor stages.
+
+### Run the desktop prototype
+
+**Prerequisites:** Python 3.10+
+
+1. `cd python_app`
+2. (Optional) create a virtual environment: `python -m venv .venv` and activate it
+3. Install dependencies: `pip install -r requirements.txt`
+4. Launch the app: `python main.py` *(or `python -m landviewer_desktop`)*
+
+The window will allow you to choose the cadastral and field images, mirroring the web
+application's first step while we iterate on the remaining features.
