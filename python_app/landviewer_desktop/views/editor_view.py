@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QSlider,
     QVBoxLayout,
     QWidget,
+    QSizePolicy,
 )
 
 from landviewer_desktop.services import image_io
@@ -39,7 +40,7 @@ class OverlayHandle(QGraphicsEllipseItem):
         self._index = index
         self._bounds = bounds
 
-        radius = 7.0
+        radius = 9.0
         self.setRect(-radius, -radius, radius * 2, radius * 2)
         self.setBrush(QColor("#38bdf8"))
         self.setPen(QPen(QColor("#0f172a"), 1.5))
@@ -329,7 +330,8 @@ class EditorGraphicsView(QGraphicsView):
                 matrix,
                 (width, height),
                 flags=cv2.INTER_LINEAR,
-                borderMode=cv2.BORDER_TRANSPARENT,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(0, 0, 0, 0),
             )
         except cv2.error:
             self._overlay_item.setVisible(False)
@@ -364,6 +366,116 @@ class EditorGraphicsView(QGraphicsView):
         self._polygon_item.setVisible(True)
 
 
+class _OverlayPreviewCanvas(QWidget):
+    """Static preview that renders the cadastral image with corner markers."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._pixmap = None
+        self._image_size: Optional[Tuple[int, int]] = None
+        self.setMinimumSize(220, 220)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+
+    def set_image(self, image: Optional[Image.Image]) -> None:
+        if image is None:
+            self._pixmap = None
+            self._image_size = None
+        else:
+            self._pixmap = image_io.image_to_qpixmap(image)
+            self._image_size = image.size
+        self.update()
+
+    # ------------------------------------------------------------------
+    def paintEvent(self, event):  # type: ignore[override]
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+        rect = self.rect()
+        painter.fillRect(rect, QColor("#0f172a"))
+
+        border_pen = QPen(QColor("#1f2937"))
+        border_pen.setWidth(1)
+        painter.setPen(border_pen)
+        painter.drawRect(rect.adjusted(0, 0, -1, -1))
+
+        if not self._pixmap or not self._image_size:
+            painter.setPen(QColor("#94a3b8"))
+            painter.drawText(
+                rect,
+                Qt.AlignmentFlag.AlignCenter,
+                "Overlay preview\nAwaiting crop",
+            )
+            return
+
+        image_width, image_height = self._image_size
+        if image_width <= 0 or image_height <= 0:
+            return
+
+        target = rect.adjusted(12, 12, -12, -12)
+        if target.width() <= 0 or target.height() <= 0:
+            return
+
+        scale = min(target.width() / image_width, target.height() / image_height)
+        scaled_width = image_width * scale
+        scaled_height = image_height * scale
+        left = target.left() + (target.width() - scaled_width) / 2.0
+        top = target.top() + (target.height() - scaled_height) / 2.0
+
+        dest_rect = QRectF(left, top, scaled_width, scaled_height)
+        painter.drawPixmap(dest_rect, self._pixmap, QRectF(0, 0, image_width, image_height))
+
+        corner_labels = ("1", "2", "3", "4")
+        corners = (
+            QPointF(dest_rect.left(), dest_rect.top()),
+            QPointF(dest_rect.right(), dest_rect.top()),
+            QPointF(dest_rect.right(), dest_rect.bottom()),
+            QPointF(dest_rect.left(), dest_rect.bottom()),
+        )
+
+        handle_brush = QColor("#38bdf8")
+        handle_pen = QPen(QColor("#0f172a"), 1.5)
+
+        for label, point in zip(corner_labels, corners):
+            marker_rect = QRectF(point.x() - 9.0, point.y() - 9.0, 18.0, 18.0)
+            painter.setBrush(handle_brush)
+            painter.setPen(handle_pen)
+            painter.drawEllipse(marker_rect)
+            painter.setPen(QPen(QColor("#0f172a")))
+            painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, label)
+
+
+class OverlayPreviewPanel(QWidget):
+    """Container displaying the cadastral preview alongside guidance text."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._canvas = _OverlayPreviewCanvas()
+
+        title = QLabel("Cadastral overlay preview")
+        title.setObjectName("overlayPreviewTitle")
+
+        helper = QLabel(
+            "Corner markers show the manual pin order. Align handle 1 with the same "
+            "corner on the field photo and continue clockwise."
+        )
+        helper.setWordWrap(True)
+        helper.setObjectName("overlayPreviewHelper")
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(title)
+        layout.addWidget(self._canvas, stretch=1)
+        layout.addSpacing(8)
+        layout.addWidget(helper)
+        layout.addStretch(1)
+
+        self.setLayout(layout)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self.setMinimumWidth(260)
+
+    def set_overlay_image(self, image: Optional[Image.Image]) -> None:
+        self._canvas.set_image(image)
+
+
 class EditorView(QWidget):
     """Top-level widget that exposes manual overlay alignment controls."""
 
@@ -381,6 +493,8 @@ class EditorView(QWidget):
 
         self._view = EditorGraphicsView()
         self._view.points_changed.connect(self._handle_points_changed)
+
+        self._preview_panel = OverlayPreviewPanel()
 
         self._image_info_label = QLabel("")
         self._image_info_label.setObjectName("editorInfoLabel")
@@ -414,7 +528,13 @@ class EditorView(QWidget):
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._instruction_label)
-        layout.addWidget(self._view, stretch=1)
+
+        view_row = QHBoxLayout()
+        view_row.setContentsMargins(0, 0, 0, 0)
+        view_row.addWidget(self._view, stretch=1)
+        view_row.addSpacing(12)
+        view_row.addWidget(self._preview_panel)
+        layout.addLayout(view_row, stretch=1)
         layout.addSpacing(8)
         layout.addWidget(self._image_info_label)
 
@@ -448,6 +568,8 @@ class EditorView(QWidget):
 
         photo = self._state.photo.image
         overlay = self._state.cadastral.cropped_image
+
+        self._preview_panel.set_overlay_image(overlay)
 
         if photo is None or overlay is None:
             self._view.clear()
