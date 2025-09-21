@@ -6,7 +6,7 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -30,13 +30,14 @@ from landviewer_desktop.services import image_io
 from landviewer_desktop.state import AppState
 
 
-class OverlayHandle(QGraphicsEllipseItem):
+class OverlayHandle(QObject, QGraphicsEllipseItem):
     """Draggable handle that clamps to the photo bounds."""
 
     moved = Signal(int, QPointF)
 
     def __init__(self, index: int, bounds: QRectF, parent: Optional[QGraphicsItem] = None) -> None:
-        super().__init__(parent)
+        QObject.__init__(self)
+        QGraphicsEllipseItem.__init__(self, parent)
         self._index = index
         self._bounds = bounds
 
@@ -60,15 +61,15 @@ class OverlayHandle(QGraphicsEllipseItem):
                 return QPointF(x, y)
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             self.moved.emit(self._index, self.pos())
-        return super().itemChange(change, value)
+        return QGraphicsEllipseItem.itemChange(self, change, value)
 
     def mousePressEvent(self, event):  # type: ignore[override]
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
-        super().mousePressEvent(event)
+        QGraphicsEllipseItem.mousePressEvent(self, event)
 
     def mouseReleaseEvent(self, event):  # type: ignore[override]
         self.setCursor(Qt.CursorShape.OpenHandCursor)
-        super().mouseReleaseEvent(event)
+        QGraphicsEllipseItem.mouseReleaseEvent(self, event)
 
 
 class EditorGraphicsView(QGraphicsView):
