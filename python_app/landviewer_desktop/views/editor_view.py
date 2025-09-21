@@ -42,16 +42,22 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
         index: int,
         bounds: Optional[QRectF],
         parent: Optional[QGraphicsItem] = None,
+        *,
+        radius: float = 9.0,
+        fill_color: str = "#38bdf8",
+        pen_color: str = "#0f172a",
+        pen_width: float = 1.5,
     ) -> None:
         QObject.__init__(self)
         QGraphicsEllipseItem.__init__(self, parent)
         self._index = index
         self._bounds: Optional[QRectF] = QRectF(bounds) if bounds is not None else None
 
-        radius = 9.0
         self.setRect(-radius, -radius, radius * 2, radius * 2)
-        self.setBrush(QColor("#38bdf8"))
-        self.setPen(QPen(QColor("#0f172a"), 1.5))
+        self.setBrush(QColor(fill_color))
+        pen = QPen(QColor(pen_color), pen_width)
+        pen.setCosmetic(True)
+        self.setPen(pen)
         self.setZValue(3)
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -89,6 +95,7 @@ class EditorGraphicsView(QGraphicsView):
 
     points_changed = Signal(list)
     photo_clicked = Signal(QPointF)
+    auto_handles_changed = Signal(list)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -117,6 +124,10 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_markers: List[QGraphicsEllipseItem] = []
         self._handle_bounds: Optional[QRectF] = None
         self._handles_constrained = True
+        self._auto_handles: List[OverlayHandle] = []
+        self._auto_points: List[QPointF] = []
+        self._auto_handles_visible = False
+        self._suppress_auto_updates = False
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -137,6 +148,10 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_click_enabled = False
         self._handle_bounds = None
         self._handles_constrained = True
+        self._clear_auto_handles()
+        self._auto_points = []
+        self._auto_handles_visible = False
+        self._suppress_auto_updates = False
 
     def load_images(
         self,
@@ -266,6 +281,58 @@ class EditorGraphicsView(QGraphicsView):
             self._set_handle_constraints(True)
         self._set_points(qpoints, emit=True)
 
+    def set_auto_adjust_points(
+        self, points: Sequence[Tuple[float, float]] | Sequence[QPointF]
+    ) -> None:
+        """Show draggable auto-pin handles for fine-tuning destination points."""
+
+        qpoints = [self._to_point(point) for point in points]
+        if not qpoints:
+            self.clear_auto_adjustment()
+            return
+
+        if len(self._auto_handles) != len(qpoints):
+            self._clear_auto_handles()
+            for index in range(len(qpoints)):
+                handle = OverlayHandle(
+                    index,
+                    None,
+                    radius=8.0,
+                    fill_color="#f97316",
+                    pen_color="#0f172a",
+                    pen_width=1.4,
+                )
+                handle.setZValue(3.5)
+                handle.moved.connect(self._handle_auto_handle_moved)
+                label = QGraphicsSimpleTextItem(str(index + 1))
+                label.setBrush(QColor("#0f172a"))
+                label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+                label.setParentItem(handle)
+                label.setPos(-4.0, -6.0)
+                self._scene.addItem(handle)
+                self._auto_handles.append(handle)
+
+        self._suppress_auto_updates = True
+        for handle, point in zip(self._auto_handles, qpoints):
+            handle.setPos(point)
+            handle.setVisible(True)
+        self._suppress_auto_updates = False
+
+        self._auto_points = [QPointF(handle.pos()) for handle in self._auto_handles]
+        self._auto_handles_visible = True
+
+    def clear_auto_adjustment(self) -> None:
+        """Remove auto-pin fine-tune handles from the scene."""
+
+        self._clear_auto_handles()
+        self._auto_points = []
+        self._auto_handles_visible = False
+
+    def auto_adjust_points(self) -> List[QPointF]:
+        """Return the current auto-pin destination points."""
+
+        return [QPointF(point) for point in self._auto_points]
+
     def set_auto_click_enabled(self, enabled: bool) -> None:
         """Enable or disable capture of photo clicks for auto pinning."""
 
@@ -290,7 +357,8 @@ class EditorGraphicsView(QGraphicsView):
 
         for index, value in enumerate(points, start=1):
             point = self._to_point(value)
-            marker = QGraphicsEllipseItem(-6.0, -6.0, 12.0, 12.0)
+            radius = 7.0
+            marker = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
             marker.setBrush(QColor("#f97316"))
             marker.setPen(QPen(QColor("#0f172a"), 1.2))
             marker.setZValue(2.5)
@@ -392,6 +460,16 @@ class EditorGraphicsView(QGraphicsView):
         self._update_overlay_pixmap()
         self._emit_points()
 
+    def _handle_auto_handle_moved(self, index: int, position: QPointF) -> None:
+        if self._suppress_auto_updates:
+            return
+        if index < 0 or index >= len(self._auto_points):
+            return
+
+        self._auto_points[index] = QPointF(position)
+        serialised = [(point.x(), point.y()) for point in self._auto_points]
+        self.auto_handles_changed.emit(serialised)
+
     def _has_valid_polygon(self) -> bool:
         if len(self._manual_points) != 4:
             return False
@@ -433,6 +511,11 @@ class EditorGraphicsView(QGraphicsView):
         for marker in self._auto_markers:
             self._scene.removeItem(marker)
         self._auto_markers = []
+
+    def _clear_auto_handles(self) -> None:
+        for handle in self._auto_handles:
+            self._scene.removeItem(handle)
+        self._auto_handles = []
 
     def _update_overlay_pixmap(self) -> None:
         if not self._overlay_item or self._overlay_array is None or self._src_points is None:
@@ -501,6 +584,7 @@ class _OverlayPreviewCanvas(QWidget):
     """Static preview that renders the cadastral image with corner markers."""
 
     point_clicked = Signal(QPointF)
+    auto_point_moved = Signal(int, QPointF)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -509,6 +593,8 @@ class _OverlayPreviewCanvas(QWidget):
         self._auto_points: List[QPointF] = []
         self._highlight_border = False
         self._show_corner_guides = True
+        self._auto_editable = False
+        self._drag_index: Optional[int] = None
         self.setMinimumSize(220, 220)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
@@ -523,6 +609,7 @@ class _OverlayPreviewCanvas(QWidget):
 
     def set_auto_points(self, points: Sequence[QPointF]) -> None:
         self._auto_points = [QPointF(point) for point in points]
+        self._drag_index = None
         self.update()
 
     def set_highlighted(self, highlighted: bool) -> None:
@@ -534,6 +621,12 @@ class _OverlayPreviewCanvas(QWidget):
         if self._show_corner_guides != visible:
             self._show_corner_guides = visible
             self.update()
+
+    def set_auto_editable(self, editable: bool) -> None:
+        if self._auto_editable != editable:
+            self._auto_editable = editable
+            if not editable:
+                self._drag_index = None
 
     # ------------------------------------------------------------------
     def paintEvent(self, event):  # type: ignore[override]
@@ -593,7 +686,7 @@ class _OverlayPreviewCanvas(QWidget):
             for index, point in enumerate(self._auto_points, start=1):
                 px = dest_rect.left() + (point.x() / image_width) * dest_rect.width()
                 py = dest_rect.top() + (point.y() / image_height) * dest_rect.height()
-                marker_rect = QRectF(px - 6.0, py - 6.0, 12.0, 12.0)
+                marker_rect = QRectF(px - 7.0, py - 7.0, 14.0, 14.0)
                 painter.setBrush(marker_color)
                 painter.setPen(pen)
                 painter.drawEllipse(marker_rect)
@@ -619,6 +712,16 @@ class _OverlayPreviewCanvas(QWidget):
             super().mousePressEvent(event)
             return
 
+        if self._auto_editable and self._auto_points:
+            index = self._hit_test_auto_point(pos, target)
+            if index is not None:
+                self._drag_index = index
+                self._update_drag_position(pos, emit=True)
+                event.accept()
+                return
+            super().mousePressEvent(event)
+            return
+
         if target.width() <= 0 or target.height() <= 0:
             super().mousePressEvent(event)
             return
@@ -629,6 +732,62 @@ class _OverlayPreviewCanvas(QWidget):
         image_y = relative_y * self._image_size[1]
         self.point_clicked.emit(QPointF(image_x, image_y))
         event.accept()
+
+    def mouseMoveEvent(self, event):  # type: ignore[override]
+        if (
+            self._auto_editable
+            and self._drag_index is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            self._update_drag_position(event.position(), emit=True)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):  # type: ignore[override]
+        if self._auto_editable and self._drag_index is not None:
+            self._update_drag_position(event.position(), emit=True)
+            self._drag_index = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _hit_test_auto_point(self, pos: QPointF, target: QRectF) -> Optional[int]:
+        if not self._image_size:
+            return None
+
+        image_width, image_height = self._image_size
+        radius = 12.0
+        for index, point in enumerate(self._auto_points):
+            px = target.left() + (point.x() / image_width) * target.width()
+            py = target.top() + (point.y() / image_height) * target.height()
+            dx = pos.x() - px
+            dy = pos.y() - py
+            if dx * dx + dy * dy <= radius * radius:
+                return index
+        return None
+
+    def _update_drag_position(self, pos: QPointF, *, emit: bool) -> None:
+        if self._drag_index is None or not self._image_size:
+            return
+
+        target = self._target_rect()
+        if target is None or target.width() <= 0 or target.height() <= 0:
+            return
+
+        clamped_x = min(max(pos.x(), target.left()), target.right())
+        clamped_y = min(max(pos.y(), target.top()), target.bottom())
+        relative_x = (clamped_x - target.left()) / target.width()
+        relative_y = (clamped_y - target.top()) / target.height()
+        image_x = relative_x * self._image_size[0]
+        image_y = relative_y * self._image_size[1]
+
+        point = QPointF(image_x, image_y)
+        if 0 <= self._drag_index < len(self._auto_points):
+            self._auto_points[self._drag_index] = point
+            self.update()
+            if emit:
+                self.auto_point_moved.emit(self._drag_index, point)
 
     def _target_rect(self) -> Optional[QRectF]:
         if not self._image_size:
@@ -655,11 +814,13 @@ class OverlayPreviewPanel(QWidget):
     """Container displaying the cadastral preview alongside guidance text."""
 
     point_clicked = Signal(QPointF)
+    auto_point_moved = Signal(int, QPointF)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._canvas = _OverlayPreviewCanvas()
         self._canvas.point_clicked.connect(self.point_clicked)
+        self._canvas.auto_point_moved.connect(self.auto_point_moved)
 
         title = QLabel("Cadastral overlay preview")
         title.setObjectName("overlayPreviewTitle")
@@ -694,6 +855,9 @@ class OverlayPreviewPanel(QWidget):
     def set_corner_guides_visible(self, visible: bool) -> None:
         self._canvas.set_corner_guides_visible(visible)
 
+    def set_auto_editable(self, editable: bool) -> None:
+        self._canvas.set_auto_editable(editable)
+
 
 class EditorView(QWidget):
     """Top-level widget that exposes manual overlay alignment controls."""
@@ -721,9 +885,11 @@ class EditorView(QWidget):
         self._view = EditorGraphicsView()
         self._view.points_changed.connect(self._handle_points_changed)
         self._view.photo_clicked.connect(self._handle_photo_clicked)
+        self._view.auto_handles_changed.connect(self._handle_auto_dest_points_adjusted)
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
+        self._preview_panel.auto_point_moved.connect(self._handle_auto_source_point_adjusted)
 
         self._image_info_label = QLabel("")
         self._image_info_label.setObjectName("editorInfoLabel")
@@ -956,8 +1122,10 @@ class EditorView(QWidget):
         self._auto_dest_points = []
         self._view.set_handles_visible(False)
         self._view.set_auto_markers([])
+        self._view.clear_auto_adjustment()
         self._preview_panel.set_auto_points([])
         self._preview_panel.set_corner_guides_visible(False)
+        self._preview_panel.set_auto_editable(False)
         self._update_auto_focus()
         self._update_instruction_text()
 
@@ -970,9 +1138,11 @@ class EditorView(QWidget):
         self._preview_panel.set_auto_points([])
         self._preview_panel.set_highlighted(False)
         self._preview_panel.set_corner_guides_visible(True)
+        self._preview_panel.set_auto_editable(False)
         self._view.set_auto_markers([])
         self._view.set_auto_click_enabled(False)
         self._view.set_auto_cursor(False)
+        self._view.clear_auto_adjustment()
         self._view.set_handles_visible(True)
         if not silent:
             self._update_instruction_text()
@@ -980,8 +1150,8 @@ class EditorView(QWidget):
     def _auto_instruction_for_step(self, step: int) -> str:
         if step >= 8:
             return (
-                "Auto pinning — points captured. Click Reset pins to retry or fine-tune "
-                "the handles manually."
+                "Auto pinning — points captured. Drag the red pins to refine the "
+                "alignment or click Reset pins to try again."
             )
         index = step // 2
         corner = self._AUTO_CORNER_NAMES[index]
@@ -993,7 +1163,8 @@ class EditorView(QWidget):
         if completed:
             self._auto_finished = True
             self._instruction_label.setText(
-                "Auto pinning complete — fine-tune the handles if needed."
+                "Auto pinning complete — drag the red pins on the photo or preview "
+                "to fine-tune alignment."
             )
             return
         if self._auto_active:
@@ -1001,7 +1172,8 @@ class EditorView(QWidget):
         elif self._current_mode == "auto":
             if self._auto_finished:
                 self._instruction_label.setText(
-                    "Auto pinning complete — fine-tune the handles if needed."
+                    "Auto pinning complete — drag the red pins on the photo or preview "
+                    "to fine-tune alignment."
                 )
             else:
                 self._instruction_label.setText(
@@ -1155,10 +1327,20 @@ class EditorView(QWidget):
             return
 
         manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
-        self._view.set_handles_visible(True)
         self._view.set_manual_points(manual_points, allow_outside=True)
+        self._view.set_handles_visible(False)
+        self._view.set_auto_markers([])
+        self._view.clear_auto_adjustment()
+        self._view.set_auto_click_enabled(False)
+        self._view.set_auto_cursor(False)
+        self._view.set_auto_adjust_points(self._auto_dest_points)
 
-        self._cancel_auto_mode(silent=True)
+        self._preview_panel.set_auto_points(self._auto_source_points)
+        self._preview_panel.set_highlighted(False)
+        self._preview_panel.set_corner_guides_visible(False)
+        self._preview_panel.set_auto_editable(True)
+
+        self._auto_active = False
         self._auto_finished = True
         self._auto_toggle.blockSignals(True)
         self._manual_toggle.blockSignals(True)
@@ -1168,6 +1350,73 @@ class EditorView(QWidget):
         self._manual_toggle.blockSignals(False)
         self._current_mode = "auto"
         self._update_instruction_text(completed=True)
+
+    def _handle_auto_dest_points_adjusted(self, points: list) -> None:
+        if not self._auto_finished or len(points) != 4:
+            return
+
+        updated: List[QPointF] = []
+        for value in points:
+            try:
+                x, y = value
+            except (TypeError, ValueError):
+                return
+            updated.append(QPointF(float(x), float(y)))
+
+        self._auto_dest_points = updated
+        self._update_auto_alignment_from_points()
+        self._update_instruction_text(completed=True)
+
+    def _handle_auto_source_point_adjusted(self, index: int, point: QPointF) -> None:
+        if not self._auto_finished:
+            return
+        if index < 0 or index >= len(self._auto_source_points):
+            return
+
+        self._auto_source_points[index] = QPointF(point)
+        self._preview_panel.set_auto_points(self._auto_source_points)
+        self._update_auto_alignment_from_points()
+        self._update_instruction_text(completed=True)
+
+    def _update_auto_alignment_from_points(self) -> None:
+        overlay = self._current_overlay_image
+        if overlay is None or len(self._auto_source_points) != 4 or len(self._auto_dest_points) != 4:
+            return
+
+        src = np.array([(point.x(), point.y()) for point in self._auto_source_points], dtype=np.float32)
+        dst = np.array([(point.x(), point.y()) for point in self._auto_dest_points], dtype=np.float32)
+
+        try:
+            matrix = cv2.getPerspectiveTransform(src, dst)
+        except cv2.error:
+            return
+
+        width, height = overlay.size
+        if width <= 1 or height <= 1:
+            return
+
+        corners = np.array(
+            [
+                [[0.0, 0.0]],
+                [[width - 1.0, 0.0]],
+                [[width - 1.0, height - 1.0]],
+                [[0.0, height - 1.0]],
+            ],
+            dtype=np.float32,
+        )
+        try:
+            mapped = cv2.perspectiveTransform(corners, matrix)
+        except cv2.error:
+            return
+
+        flattened = mapped.reshape(-1, 2)
+        if not np.isfinite(flattened).all():
+            return
+
+        manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
+        self._view.set_manual_points(manual_points, allow_outside=True)
+        self._view.set_handles_visible(False)
+        self._view.set_auto_adjust_points(self._auto_dest_points)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._overlay_checkbox.setEnabled(enabled)
