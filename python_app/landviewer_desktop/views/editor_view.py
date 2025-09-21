@@ -12,12 +12,14 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsSimpleTextItem,
     QGraphicsPathItem,
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QRadioButton,
     QSlider,
@@ -76,6 +78,7 @@ class EditorGraphicsView(QGraphicsView):
     """Renders the field photo with the warped cadastral overlay."""
 
     points_changed = Signal(list)
+    photo_clicked = Signal(QPointF)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -99,6 +102,9 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
         self._suppress_point_updates = False
+        self._handles_visible = True
+        self._auto_click_enabled = False
+        self._auto_markers: List[QGraphicsEllipseItem] = []
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -114,6 +120,9 @@ class EditorGraphicsView(QGraphicsView):
         self._src_points = None
         self._manual_points = []
         self._default_points = None
+        self._auto_markers = []
+        self._handles_visible = True
+        self._auto_click_enabled = False
 
     def load_images(
         self,
@@ -176,6 +185,8 @@ class EditorGraphicsView(QGraphicsView):
             handle.moved.connect(self._handle_point_moved)
             self._scene.addItem(handle)
             self._handles.append(handle)
+        for handle in self._handles:
+            handle.setVisible(self._handles_visible)
 
         self._manual_points = [QPointF(handle.pos()) for handle in self._handles]
         self._update_polygon()
@@ -209,6 +220,84 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_visible = visible
         self._overlay_opacity = max(0.0, min(opacity, 1.0))
         self._update_overlay_pixmap()
+
+    def set_handles_visible(self, visible: bool) -> None:
+        """Show or hide the draggable handles."""
+
+        self._handles_visible = visible
+        for handle in self._handles:
+            handle.setVisible(visible)
+
+    def set_manual_points(
+        self, points: Sequence[Tuple[float, float]] | Sequence[QPointF]
+    ) -> None:
+        """Move handles to the supplied coordinates and emit updates."""
+
+        if not self._handles or len(points) != len(self._handles):
+            return
+
+        qpoints = [self._to_point(point) for point in points]
+        self._set_points(qpoints, emit=True)
+
+    def set_auto_click_enabled(self, enabled: bool) -> None:
+        """Enable or disable capture of photo clicks for auto pinning."""
+
+        self._auto_click_enabled = enabled
+
+    def set_auto_cursor(self, enabled: bool) -> None:
+        """Toggle a crosshair cursor when awaiting destination clicks."""
+
+        if enabled:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.viewport().unsetCursor()
+
+    def set_auto_markers(
+        self, points: Sequence[Tuple[float, float]] | Sequence[QPointF]
+    ) -> None:
+        """Display numbered markers for auto pin destination points."""
+
+        self._clear_auto_markers()
+        if not self._photo_item:
+            return
+
+        for index, value in enumerate(points, start=1):
+            point = self._to_point(value)
+            marker = QGraphicsEllipseItem(-6.0, -6.0, 12.0, 12.0)
+            marker.setBrush(QColor("#f97316"))
+            marker.setPen(QPen(QColor("#0f172a"), 1.2))
+            marker.setZValue(2.5)
+            marker.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+            marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            marker.setPos(point)
+            self._scene.addItem(marker)
+            self._auto_markers.append(marker)
+
+            label = QGraphicsSimpleTextItem(str(index))
+            label.setBrush(QColor("#0f172a"))
+            label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+            label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+            label.setParentItem(marker)
+            label.setPos(-4.0, -6.0)
+
+    # ------------------------------------------------------------------
+    def mousePressEvent(self, event):  # type: ignore[override]
+        if (
+            self._auto_click_enabled
+            and event.button() == Qt.MouseButton.LeftButton
+            and self._photo_item is not None
+        ):
+            scene_pos = self.mapToScene(event.position().toPoint())
+            item_pos = self._photo_item.mapFromScene(scene_pos)
+            rect = self._photo_item.boundingRect()
+            if rect.contains(item_pos):
+                clamped_x = min(max(item_pos.x(), rect.left()), rect.right())
+                clamped_y = min(max(item_pos.y(), rect.top()), rect.bottom())
+                clamped_scene = self._photo_item.mapToScene(QPointF(clamped_x, clamped_y))
+                self.photo_clicked.emit(clamped_scene)
+                event.accept()
+                return
+        super().mousePressEvent(event)
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event):  # type: ignore[override]
@@ -304,6 +393,11 @@ class EditorGraphicsView(QGraphicsView):
         x, y = value  # type: ignore[misc]
         return QPointF(float(x), float(y))
 
+    def _clear_auto_markers(self) -> None:
+        for marker in self._auto_markers:
+            self._scene.removeItem(marker)
+        self._auto_markers = []
+
     def _update_overlay_pixmap(self) -> None:
         if not self._overlay_item or self._overlay_array is None or self._src_points is None:
             return
@@ -370,10 +464,14 @@ class EditorGraphicsView(QGraphicsView):
 class _OverlayPreviewCanvas(QWidget):
     """Static preview that renders the cadastral image with corner markers."""
 
+    point_clicked = Signal(QPointF)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._pixmap = None
         self._image_size: Optional[Tuple[int, int]] = None
+        self._auto_points: List[QPointF] = []
+        self._highlight_border = False
         self.setMinimumSize(220, 220)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
@@ -386,6 +484,15 @@ class _OverlayPreviewCanvas(QWidget):
             self._image_size = image.size
         self.update()
 
+    def set_auto_points(self, points: Sequence[QPointF]) -> None:
+        self._auto_points = [QPointF(point) for point in points]
+        self.update()
+
+    def set_highlighted(self, highlighted: bool) -> None:
+        if self._highlight_border != highlighted:
+            self._highlight_border = highlighted
+            self.update()
+
     # ------------------------------------------------------------------
     def paintEvent(self, event):  # type: ignore[override]
         painter = QPainter(self)
@@ -394,7 +501,8 @@ class _OverlayPreviewCanvas(QWidget):
         rect = self.rect()
         painter.fillRect(rect, QColor("#0f172a"))
 
-        border_pen = QPen(QColor("#1f2937"))
+        border_color = "#38bdf8" if self._highlight_border else "#1f2937"
+        border_pen = QPen(QColor(border_color))
         border_pen.setWidth(1)
         painter.setPen(border_pen)
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
@@ -412,17 +520,9 @@ class _OverlayPreviewCanvas(QWidget):
         if image_width <= 0 or image_height <= 0:
             return
 
-        target = rect.adjusted(12, 12, -12, -12)
-        if target.width() <= 0 or target.height() <= 0:
+        dest_rect = self._target_rect()
+        if dest_rect is None:
             return
-
-        scale = min(target.width() / image_width, target.height() / image_height)
-        scaled_width = image_width * scale
-        scaled_height = image_height * scale
-        left = target.left() + (target.width() - scaled_width) / 2.0
-        top = target.top() + (target.height() - scaled_height) / 2.0
-
-        dest_rect = QRectF(left, top, scaled_width, scaled_height)
         painter.drawPixmap(dest_rect, self._pixmap, QRectF(0, 0, image_width, image_height))
 
         corner_labels = ("1", "2", "3", "4")
@@ -444,13 +544,79 @@ class _OverlayPreviewCanvas(QWidget):
             painter.setPen(QPen(QColor("#0f172a")))
             painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, label)
 
+        if self._auto_points:
+            marker_color = QColor("#f97316")
+            pen = QPen(QColor("#0f172a"), 1.2)
+            for index, point in enumerate(self._auto_points, start=1):
+                px = dest_rect.left() + (point.x() / image_width) * dest_rect.width()
+                py = dest_rect.top() + (point.y() / image_height) * dest_rect.height()
+                marker_rect = QRectF(px - 6.0, py - 6.0, 12.0, 12.0)
+                painter.setBrush(marker_color)
+                painter.setPen(pen)
+                painter.drawEllipse(marker_rect)
+                painter.setPen(QPen(QColor("#0f172a")))
+                painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, str(index))
+
+    def mousePressEvent(self, event):  # type: ignore[override]
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+
+        if not self._pixmap or not self._image_size:
+            super().mousePressEvent(event)
+            return
+
+        target = self._target_rect()
+        if target is None:
+            super().mousePressEvent(event)
+            return
+
+        pos = event.position()
+        if not target.contains(pos):
+            super().mousePressEvent(event)
+            return
+
+        if target.width() <= 0 or target.height() <= 0:
+            super().mousePressEvent(event)
+            return
+
+        relative_x = (pos.x() - target.left()) / target.width()
+        relative_y = (pos.y() - target.top()) / target.height()
+        image_x = relative_x * self._image_size[0]
+        image_y = relative_y * self._image_size[1]
+        self.point_clicked.emit(QPointF(image_x, image_y))
+        event.accept()
+
+    def _target_rect(self) -> Optional[QRectF]:
+        if not self._image_size:
+            return None
+
+        rect = self.rect()
+        target = rect.adjusted(12, 12, -12, -12)
+        if target.width() <= 0 or target.height() <= 0:
+            return None
+
+        image_width, image_height = self._image_size
+        if image_width <= 0 or image_height <= 0:
+            return None
+
+        scale = min(target.width() / image_width, target.height() / image_height)
+        scaled_width = image_width * scale
+        scaled_height = image_height * scale
+        left = target.left() + (target.width() - scaled_width) / 2.0
+        top = target.top() + (target.height() - scaled_height) / 2.0
+        return QRectF(left, top, scaled_width, scaled_height)
+
 
 class OverlayPreviewPanel(QWidget):
     """Container displaying the cadastral preview alongside guidance text."""
 
+    point_clicked = Signal(QPointF)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._canvas = _OverlayPreviewCanvas()
+        self._canvas.point_clicked.connect(self.point_clicked)
 
         title = QLabel("Cadastral overlay preview")
         title.setObjectName("overlayPreviewTitle")
@@ -476,35 +642,51 @@ class OverlayPreviewPanel(QWidget):
     def set_overlay_image(self, image: Optional[Image.Image]) -> None:
         self._canvas.set_image(image)
 
+    def set_auto_points(self, points: Sequence[QPointF]) -> None:
+        self._canvas.set_auto_points(points)
+
+    def set_highlighted(self, highlighted: bool) -> None:
+        self._canvas.set_highlighted(highlighted)
+
 
 class EditorView(QWidget):
     """Top-level widget that exposes manual overlay alignment controls."""
 
     restart_requested = Signal()
 
+    _MANUAL_INSTRUCTION = (
+        "Manual pinning mode — drag the four handles to line up the cadastral overlay "
+        "with the field photo. Adjust the overlay opacity to inspect alignment."
+    )
+    _AUTO_CORNER_NAMES = (
+        "corner 1 (top-left)",
+        "corner 2 (top-right)",
+        "corner 3 (bottom-right)",
+        "corner 4 (bottom-left)",
+    )
+
     def __init__(self, state: AppState, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._state = state
 
-        self._instruction_label = QLabel(
-            "Manual pinning mode — drag the four handles to line up the cadastral overlay "
-            "with the field photo. Adjust the overlay opacity to inspect alignment."
-        )
+        self._instruction_label = QLabel(self._MANUAL_INSTRUCTION)
         self._instruction_label.setWordWrap(True)
 
         self._view = EditorGraphicsView()
         self._view.points_changed.connect(self._handle_points_changed)
+        self._view.photo_clicked.connect(self._handle_photo_clicked)
 
         self._preview_panel = OverlayPreviewPanel()
+        self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
 
         self._image_info_label = QLabel("")
         self._image_info_label.setObjectName("editorInfoLabel")
 
         self._manual_radio = QRadioButton("Manual pinning")
         self._manual_radio.setChecked(True)
-        self._manual_radio.setEnabled(False)
-        self._auto_radio = QRadioButton("Automatic pinning (coming soon)")
-        self._auto_radio.setEnabled(False)
+        self._manual_radio.toggled.connect(self._handle_manual_mode_selected)
+        self._auto_radio = QRadioButton("Automatic pinning")
+        self._auto_radio.toggled.connect(self._handle_auto_mode_selected)
 
         self._overlay_checkbox = QCheckBox("Show cadastral overlay")
         self._overlay_checkbox.toggled.connect(self._handle_overlay_visibility)
@@ -522,7 +704,7 @@ class EditorView(QWidget):
         )
 
         self._reset_pins_button = QPushButton("Reset pins")
-        self._reset_pins_button.clicked.connect(self._view.reset_manual_points)
+        self._reset_pins_button.clicked.connect(self._handle_reset_pins)
 
         self._restart_button = QPushButton("Start over")
         self._restart_button.clicked.connect(self.restart_requested.emit)
@@ -562,6 +744,12 @@ class EditorView(QWidget):
         self.setLayout(layout)
 
         self._set_controls_enabled(False)
+        self._current_overlay_image: Optional[Image.Image] = None
+        self._auto_active = False
+        self._auto_step = 0
+        self._auto_source_points: List[QPointF] = []
+        self._auto_dest_points: List[QPointF] = []
+        self._current_mode = "manual"
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -570,17 +758,33 @@ class EditorView(QWidget):
         photo = self._state.photo.image
         overlay = self._state.cadastral.cropped_image
 
+        self._current_overlay_image = overlay
         self._preview_panel.set_overlay_image(overlay)
+        self._preview_panel.set_auto_points([])
+        self._preview_panel.set_highlighted(False)
+        self._view.set_auto_markers([])
+        self._view.set_auto_click_enabled(False)
+        self._view.set_auto_cursor(False)
 
         if photo is None or overlay is None:
+            self._cancel_auto_mode(silent=True)
             self._view.clear()
             self._view.setEnabled(False)
             self._set_controls_enabled(False)
             self._image_info_label.setText(
                 "Upload a cadastral map and field photo, then crop the overlay to begin alignment."
             )
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            self._current_mode = "manual"
+            self._instruction_label.setText(self._MANUAL_INSTRUCTION)
             return
 
+        self._cancel_auto_mode(silent=True)
         photo_pixmap = image_io.image_to_qpixmap(photo)
         manual_points = self._state.overlay.manual_points
         if manual_points:
@@ -610,6 +814,15 @@ class EditorView(QWidget):
 
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
+
+        self._manual_radio.blockSignals(True)
+        self._manual_radio.setChecked(True)
+        self._manual_radio.blockSignals(False)
+        self._auto_radio.blockSignals(True)
+        self._auto_radio.setChecked(False)
+        self._auto_radio.blockSignals(False)
+        self._current_mode = "manual"
+        self._update_instruction_text()
 
         self._image_info_label.setText(
             self._build_info_text(photo.size, overlay.size, self._state.photo.resized_for_performance)
@@ -648,13 +861,241 @@ class EditorView(QWidget):
             return
         self._state.overlay.manual_points = tuple((float(x), float(y)) for x, y in points)
 
+    def _handle_manual_mode_selected(self, checked: bool) -> None:
+        if not checked:
+            return
+        if self._current_mode == "manual":
+            self._update_instruction_text()
+            return
+        self._current_mode = "manual"
+        self._cancel_auto_mode()
+        self._auto_radio.blockSignals(True)
+        self._auto_radio.setChecked(False)
+        self._auto_radio.blockSignals(False)
+
+    def _handle_auto_mode_selected(self, checked: bool) -> None:
+        if not checked:
+            return
+        if not self._view.isEnabled() or self._current_overlay_image is None:
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            QMessageBox.warning(
+                self,
+                "Automatic pinning unavailable",
+                "Load and crop both images before using automatic pinning.",
+            )
+            return
+        if self._current_mode == "auto":
+            self._update_instruction_text()
+            return
+        self._current_mode = "auto"
+        self._start_auto_mode()
+
+    def _start_auto_mode(self) -> None:
+        self._auto_active = True
+        self._auto_step = 0
+        self._auto_source_points = []
+        self._auto_dest_points = []
+        self._view.set_handles_visible(False)
+        self._view.set_auto_markers([])
+        self._preview_panel.set_auto_points([])
+        self._update_auto_focus()
+        self._update_instruction_text()
+
+    def _cancel_auto_mode(self, *, silent: bool = False) -> None:
+        self._auto_active = False
+        self._auto_step = 0
+        self._auto_source_points.clear()
+        self._auto_dest_points.clear()
+        self._preview_panel.set_auto_points([])
+        self._preview_panel.set_highlighted(False)
+        self._view.set_auto_markers([])
+        self._view.set_auto_click_enabled(False)
+        self._view.set_auto_cursor(False)
+        self._view.set_handles_visible(True)
+        if not silent:
+            self._current_mode = "manual"
+            self._update_instruction_text()
+
+    def _auto_instruction_for_step(self, step: int) -> str:
+        if step >= 8:
+            return (
+                "Auto pinning — points captured. Click Reset pins to retry or fine-tune "
+                "the handles manually."
+            )
+        index = step // 2
+        corner = self._AUTO_CORNER_NAMES[index]
+        if step % 2 == 0:
+            return f"Auto pinning — Step {index + 1}: Click {corner} on the cadastral preview."
+        return f"Auto pinning — Step {index + 1}: Click the matching {corner} on the field photo."
+
+    def _update_instruction_text(self, *, completed: bool = False) -> None:
+        if completed:
+            self._instruction_label.setText(
+                "Auto pinning complete — fine-tune the handles if needed."
+            )
+            return
+        if self._auto_active:
+            self._instruction_label.setText(self._auto_instruction_for_step(self._auto_step))
+        else:
+            self._instruction_label.setText(self._MANUAL_INSTRUCTION)
+
+    def _update_auto_focus(self) -> None:
+        if not self._auto_active or self._auto_step >= 8:
+            self._preview_panel.set_highlighted(False)
+            self._view.set_auto_click_enabled(False)
+            self._view.set_auto_cursor(False)
+            return
+        waiting_for_source = self._auto_step % 2 == 0
+        self._preview_panel.set_highlighted(waiting_for_source)
+        self._view.set_auto_click_enabled(not waiting_for_source)
+        self._view.set_auto_cursor(not waiting_for_source)
+
+    def _handle_preview_point_clicked(self, point: QPointF) -> None:
+        if (
+            not self._auto_active
+            or self._auto_step >= 8
+            or self._auto_step % 2 == 1
+            or len(self._auto_source_points) >= 4
+        ):
+            return
+        self._auto_source_points.append(QPointF(point))
+        self._preview_panel.set_auto_points(self._auto_source_points)
+        self._auto_step += 1
+        self._update_auto_focus()
+        self._update_instruction_text()
+
+    def _handle_photo_clicked(self, point: QPointF) -> None:
+        if (
+            not self._auto_active
+            or self._auto_step >= 8
+            or self._auto_step % 2 == 0
+            or len(self._auto_dest_points) >= 4
+        ):
+            return
+        self._auto_dest_points.append(QPointF(point))
+        self._view.set_auto_markers(self._auto_dest_points)
+        self._auto_step += 1
+        if self._auto_step >= 8:
+            self._update_auto_focus()
+            self._complete_auto_alignment()
+        else:
+            self._update_auto_focus()
+            self._update_instruction_text()
+
+    def _handle_reset_pins(self) -> None:
+        if self._auto_active:
+            self._start_auto_mode()
+        else:
+            self._view.reset_manual_points()
+
+    def _complete_auto_alignment(self) -> None:
+        overlay = self._current_overlay_image
+        if overlay is None or len(self._auto_source_points) != 4 or len(self._auto_dest_points) != 4:
+            self._cancel_auto_mode()
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            return
+
+        src = np.array([(point.x(), point.y()) for point in self._auto_source_points], dtype=np.float32)
+        dst = np.array([(point.x(), point.y()) for point in self._auto_dest_points], dtype=np.float32)
+
+        try:
+            matrix = cv2.getPerspectiveTransform(src, dst)
+        except cv2.error:
+            QMessageBox.warning(
+                self,
+                "Auto alignment failed",
+                "Could not compute the perspective transform. Please try again.",
+            )
+            self._cancel_auto_mode()
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            return
+
+        width, height = overlay.size
+        if width <= 1 or height <= 1:
+            self._cancel_auto_mode()
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            return
+
+        corners = np.array(
+            [
+                [[0.0, 0.0]],
+                [[width - 1.0, 0.0]],
+                [[width - 1.0, height - 1.0]],
+                [[0.0, height - 1.0]],
+            ],
+            dtype=np.float32,
+        )
+        try:
+            mapped = cv2.perspectiveTransform(corners, matrix)
+        except cv2.error:
+            QMessageBox.warning(
+                self,
+                "Auto alignment failed",
+                "Unable to project the overlay corners. Please retry.",
+            )
+            self._cancel_auto_mode()
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            return
+
+        flattened = mapped.reshape(-1, 2)
+        if not np.isfinite(flattened).all():
+            QMessageBox.warning(
+                self,
+                "Auto alignment failed",
+                "The calculated transform produced invalid coordinates.",
+            )
+            self._cancel_auto_mode()
+            self._manual_radio.blockSignals(True)
+            self._manual_radio.setChecked(True)
+            self._manual_radio.blockSignals(False)
+            self._auto_radio.blockSignals(True)
+            self._auto_radio.setChecked(False)
+            self._auto_radio.blockSignals(False)
+            return
+
+        manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
+        self._view.set_handles_visible(True)
+        self._view.set_manual_points(manual_points)
+
+        self._cancel_auto_mode(silent=True)
+        self._current_mode = "manual"
+        self._manual_radio.blockSignals(True)
+        self._manual_radio.setChecked(True)
+        self._manual_radio.blockSignals(False)
+        self._auto_radio.blockSignals(True)
+        self._auto_radio.setChecked(False)
+        self._auto_radio.blockSignals(False)
+        self._update_instruction_text(completed=True)
+
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
-        self._manual_radio.setEnabled(False)
-        self._auto_radio.setEnabled(False)
+        self._manual_radio.setEnabled(enabled)
+        self._auto_radio.setEnabled(enabled)
 
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))
