@@ -9,6 +9,7 @@ from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -21,7 +22,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
-    QRadioButton,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -728,11 +728,19 @@ class EditorView(QWidget):
         self._image_info_label = QLabel("")
         self._image_info_label.setObjectName("editorInfoLabel")
 
-        self._manual_radio = QRadioButton("Manual pinning")
-        self._manual_radio.setChecked(True)
-        self._manual_radio.toggled.connect(self._handle_manual_mode_selected)
-        self._auto_radio = QRadioButton("Automatic pinning")
-        self._auto_radio.toggled.connect(self._handle_auto_mode_selected)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+
+        self._manual_toggle = QPushButton("Manual pinning")
+        self._manual_toggle.setCheckable(True)
+        self._manual_toggle.setChecked(True)
+        self._manual_toggle.toggled.connect(self._handle_manual_mode_selected)
+        self._mode_group.addButton(self._manual_toggle)
+
+        self._auto_toggle = QPushButton("Automatic pinning")
+        self._auto_toggle.setCheckable(True)
+        self._auto_toggle.toggled.connect(self._handle_auto_mode_selected)
+        self._mode_group.addButton(self._auto_toggle)
 
         self._overlay_checkbox = QCheckBox("Show cadastral overlay")
         self._overlay_checkbox.toggled.connect(self._handle_overlay_visibility)
@@ -768,8 +776,8 @@ class EditorView(QWidget):
         layout.addWidget(self._image_info_label)
 
         mode_row = QHBoxLayout()
-        mode_row.addWidget(self._manual_radio)
-        mode_row.addWidget(self._auto_radio)
+        mode_row.addWidget(self._manual_toggle)
+        mode_row.addWidget(self._auto_toggle)
         mode_row.addStretch(1)
         layout.addLayout(mode_row)
 
@@ -796,6 +804,7 @@ class EditorView(QWidget):
         self._auto_source_points: List[QPointF] = []
         self._auto_dest_points: List[QPointF] = []
         self._current_mode = "manual"
+        self._auto_finished = False
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -820,12 +829,12 @@ class EditorView(QWidget):
             self._image_info_label.setText(
                 "Upload a cadastral map and field photo, then crop the overlay to begin alignment."
             )
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
             self._current_mode = "manual"
             self._instruction_label.setText(self._MANUAL_INSTRUCTION)
             return
@@ -861,12 +870,12 @@ class EditorView(QWidget):
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
 
-        self._manual_radio.blockSignals(True)
-        self._manual_radio.setChecked(True)
-        self._manual_radio.blockSignals(False)
-        self._auto_radio.blockSignals(True)
-        self._auto_radio.setChecked(False)
-        self._auto_radio.blockSignals(False)
+        self._manual_toggle.blockSignals(True)
+        self._auto_toggle.blockSignals(True)
+        self._manual_toggle.setChecked(True)
+        self._auto_toggle.setChecked(False)
+        self._manual_toggle.blockSignals(False)
+        self._auto_toggle.blockSignals(False)
         self._current_mode = "manual"
         self._update_instruction_text()
 
@@ -914,18 +923,19 @@ class EditorView(QWidget):
             self._update_instruction_text()
             return
         self._current_mode = "manual"
+        self._auto_finished = False
         self._cancel_auto_mode()
-        self._auto_radio.blockSignals(True)
-        self._auto_radio.setChecked(False)
-        self._auto_radio.blockSignals(False)
+        self._auto_toggle.blockSignals(True)
+        self._auto_toggle.setChecked(False)
+        self._auto_toggle.blockSignals(False)
 
     def _handle_auto_mode_selected(self, checked: bool) -> None:
         if not checked:
             return
         if not self._view.isEnabled() or self._current_overlay_image is None:
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._auto_toggle.blockSignals(True)
+            self._auto_toggle.setChecked(False)
+            self._auto_toggle.blockSignals(False)
             QMessageBox.warning(
                 self,
                 "Automatic pinning unavailable",
@@ -940,6 +950,7 @@ class EditorView(QWidget):
 
     def _start_auto_mode(self) -> None:
         self._auto_active = True
+        self._auto_finished = False
         self._auto_step = 0
         self._auto_source_points = []
         self._auto_dest_points = []
@@ -952,6 +963,7 @@ class EditorView(QWidget):
 
     def _cancel_auto_mode(self, *, silent: bool = False) -> None:
         self._auto_active = False
+        self._auto_finished = False
         self._auto_step = 0
         self._auto_source_points.clear()
         self._auto_dest_points.clear()
@@ -963,7 +975,6 @@ class EditorView(QWidget):
         self._view.set_auto_cursor(False)
         self._view.set_handles_visible(True)
         if not silent:
-            self._current_mode = "manual"
             self._update_instruction_text()
 
     def _auto_instruction_for_step(self, step: int) -> str:
@@ -980,12 +991,22 @@ class EditorView(QWidget):
 
     def _update_instruction_text(self, *, completed: bool = False) -> None:
         if completed:
+            self._auto_finished = True
             self._instruction_label.setText(
                 "Auto pinning complete — fine-tune the handles if needed."
             )
             return
         if self._auto_active:
             self._instruction_label.setText(self._auto_instruction_for_step(self._auto_step))
+        elif self._current_mode == "auto":
+            if self._auto_finished:
+                self._instruction_label.setText(
+                    "Auto pinning complete — fine-tune the handles if needed."
+                )
+            else:
+                self._instruction_label.setText(
+                    "Auto pinning — click Reset pins to begin placing corners."
+                )
         else:
             self._instruction_label.setText(self._MANUAL_INSTRUCTION)
 
@@ -1033,7 +1054,7 @@ class EditorView(QWidget):
             self._update_instruction_text()
 
     def _handle_reset_pins(self) -> None:
-        if self._auto_active:
+        if self._current_mode == "auto":
             self._start_auto_mode()
         else:
             self._view.reset_manual_points()
@@ -1041,13 +1062,15 @@ class EditorView(QWidget):
     def _complete_auto_alignment(self) -> None:
         overlay = self._current_overlay_image
         if overlay is None or len(self._auto_source_points) != 4 or len(self._auto_dest_points) != 4:
-            self._cancel_auto_mode()
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._cancel_auto_mode(silent=True)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
+            self._current_mode = "manual"
+            self._update_instruction_text()
             return
 
         src = np.array([(point.x(), point.y()) for point in self._auto_source_points], dtype=np.float32)
@@ -1061,24 +1084,28 @@ class EditorView(QWidget):
                 "Auto alignment failed",
                 "Could not compute the perspective transform. Please try again.",
             )
-            self._cancel_auto_mode()
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._cancel_auto_mode(silent=True)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
+            self._current_mode = "manual"
+            self._update_instruction_text()
             return
 
         width, height = overlay.size
         if width <= 1 or height <= 1:
-            self._cancel_auto_mode()
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._cancel_auto_mode(silent=True)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
+            self._current_mode = "manual"
+            self._update_instruction_text()
             return
 
         corners = np.array(
@@ -1098,13 +1125,15 @@ class EditorView(QWidget):
                 "Auto alignment failed",
                 "Unable to project the overlay corners. Please retry.",
             )
-            self._cancel_auto_mode()
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._cancel_auto_mode(silent=True)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
+            self._current_mode = "manual"
+            self._update_instruction_text()
             return
 
         flattened = mapped.reshape(-1, 2)
@@ -1114,13 +1143,15 @@ class EditorView(QWidget):
                 "Auto alignment failed",
                 "The calculated transform produced invalid coordinates.",
             )
-            self._cancel_auto_mode()
-            self._manual_radio.blockSignals(True)
-            self._manual_radio.setChecked(True)
-            self._manual_radio.blockSignals(False)
-            self._auto_radio.blockSignals(True)
-            self._auto_radio.setChecked(False)
-            self._auto_radio.blockSignals(False)
+            self._cancel_auto_mode(silent=True)
+            self._manual_toggle.blockSignals(True)
+            self._auto_toggle.blockSignals(True)
+            self._manual_toggle.setChecked(True)
+            self._auto_toggle.setChecked(False)
+            self._manual_toggle.blockSignals(False)
+            self._auto_toggle.blockSignals(False)
+            self._current_mode = "manual"
+            self._update_instruction_text()
             return
 
         manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
@@ -1128,13 +1159,14 @@ class EditorView(QWidget):
         self._view.set_manual_points(manual_points, allow_outside=True)
 
         self._cancel_auto_mode(silent=True)
-        self._current_mode = "manual"
-        self._manual_radio.blockSignals(True)
-        self._manual_radio.setChecked(True)
-        self._manual_radio.blockSignals(False)
-        self._auto_radio.blockSignals(True)
-        self._auto_radio.setChecked(False)
-        self._auto_radio.blockSignals(False)
+        self._auto_finished = True
+        self._auto_toggle.blockSignals(True)
+        self._manual_toggle.blockSignals(True)
+        self._auto_toggle.setChecked(True)
+        self._manual_toggle.setChecked(False)
+        self._auto_toggle.blockSignals(False)
+        self._manual_toggle.blockSignals(False)
+        self._current_mode = "auto"
         self._update_instruction_text(completed=True)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
@@ -1142,8 +1174,8 @@ class EditorView(QWidget):
         self._opacity_slider.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
-        self._manual_radio.setEnabled(enabled)
-        self._auto_radio.setEnabled(enabled)
+        self._manual_toggle.setEnabled(enabled)
+        self._auto_toggle.setEnabled(enabled)
 
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))
