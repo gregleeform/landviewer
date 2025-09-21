@@ -33,15 +33,20 @@ from landviewer_desktop.state import AppState
 
 
 class OverlayHandle(QObject, QGraphicsEllipseItem):
-    """Draggable handle that clamps to the photo bounds."""
+    """Draggable handle that optionally clamps to a bounding rectangle."""
 
     moved = Signal(int, QPointF)
 
-    def __init__(self, index: int, bounds: QRectF, parent: Optional[QGraphicsItem] = None) -> None:
+    def __init__(
+        self,
+        index: int,
+        bounds: Optional[QRectF],
+        parent: Optional[QGraphicsItem] = None,
+    ) -> None:
         QObject.__init__(self)
         QGraphicsEllipseItem.__init__(self, parent)
         self._index = index
-        self._bounds = bounds
+        self._bounds: Optional[QRectF] = QRectF(bounds) if bounds is not None else None
 
         radius = 9.0
         self.setRect(-radius, -radius, radius * 2, radius * 2)
@@ -57,7 +62,7 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
     def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
         if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
             pos = value
-            if isinstance(pos, QPointF):
+            if isinstance(pos, QPointF) and self._bounds is not None:
                 x = min(max(pos.x(), self._bounds.left()), self._bounds.right())
                 y = min(max(pos.y(), self._bounds.top()), self._bounds.bottom())
                 return QPointF(x, y)
@@ -72,6 +77,11 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
     def mouseReleaseEvent(self, event):  # type: ignore[override]
         self.setCursor(Qt.CursorShape.OpenHandCursor)
         QGraphicsEllipseItem.mouseReleaseEvent(self, event)
+
+    def update_bounds(self, bounds: Optional[QRectF]) -> None:
+        """Change the clamp rectangle; ``None`` disables clamping."""
+
+        self._bounds = QRectF(bounds) if bounds is not None else None
 
 
 class EditorGraphicsView(QGraphicsView):
@@ -105,6 +115,8 @@ class EditorGraphicsView(QGraphicsView):
         self._handles_visible = True
         self._auto_click_enabled = False
         self._auto_markers: List[QGraphicsEllipseItem] = []
+        self._handle_bounds: Optional[QRectF] = None
+        self._handles_constrained = True
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -123,6 +135,8 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_markers = []
         self._handles_visible = True
         self._auto_click_enabled = False
+        self._handle_bounds = None
+        self._handles_constrained = True
 
     def load_images(
         self,
@@ -178,15 +192,20 @@ class EditorGraphicsView(QGraphicsView):
             return
 
         bounds = self._photo_item.boundingRect()
+        self._handle_bounds = QRectF(bounds)
+        constrain_handles = all(bounds.contains(point) for point in points)
         self._handles = []
         for index, point in enumerate(points):
-            handle = OverlayHandle(index, bounds)
+            handle = OverlayHandle(index, bounds if constrain_handles else None)
             handle.setPos(point)
             handle.moved.connect(self._handle_point_moved)
             self._scene.addItem(handle)
             self._handles.append(handle)
         for handle in self._handles:
             handle.setVisible(self._handles_visible)
+
+        self._handles_constrained = constrain_handles
+        self._update_handle_bounds()
 
         self._manual_points = [QPointF(handle.pos()) for handle in self._handles]
         self._update_polygon()
@@ -212,6 +231,7 @@ class EditorGraphicsView(QGraphicsView):
         if not defaults:
             return
 
+        self._set_handle_constraints(True)
         self._set_points(defaults, emit=True)
 
     def set_overlay_settings(self, visible: bool, opacity: float) -> None:
@@ -229,7 +249,10 @@ class EditorGraphicsView(QGraphicsView):
             handle.setVisible(visible)
 
     def set_manual_points(
-        self, points: Sequence[Tuple[float, float]] | Sequence[QPointF]
+        self,
+        points: Sequence[Tuple[float, float]] | Sequence[QPointF],
+        *,
+        allow_outside: bool = False,
     ) -> None:
         """Move handles to the supplied coordinates and emit updates."""
 
@@ -237,6 +260,10 @@ class EditorGraphicsView(QGraphicsView):
             return
 
         qpoints = [self._to_point(point) for point in points]
+        if allow_outside:
+            self._set_handle_constraints(False)
+        elif self._handle_bounds and all(self._handle_bounds.contains(p) for p in qpoints):
+            self._set_handle_constraints(True)
         self._set_points(qpoints, emit=True)
 
     def set_auto_click_enabled(self, enabled: bool) -> None:
@@ -344,6 +371,15 @@ class EditorGraphicsView(QGraphicsView):
             return
         serialised = [(point.x(), point.y()) for point in self._manual_points]
         self.points_changed.emit(serialised)
+
+    def _set_handle_constraints(self, constrained: bool) -> None:
+        self._handles_constrained = constrained
+        self._update_handle_bounds()
+
+    def _update_handle_bounds(self) -> None:
+        rect = self._handle_bounds if self._handles_constrained else None
+        for handle in self._handles:
+            handle.update_bounds(rect)
 
     def _handle_point_moved(self, index: int, position: QPointF) -> None:
         if self._suppress_point_updates:
@@ -472,6 +508,7 @@ class _OverlayPreviewCanvas(QWidget):
         self._image_size: Optional[Tuple[int, int]] = None
         self._auto_points: List[QPointF] = []
         self._highlight_border = False
+        self._show_corner_guides = True
         self.setMinimumSize(220, 220)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
 
@@ -491,6 +528,11 @@ class _OverlayPreviewCanvas(QWidget):
     def set_highlighted(self, highlighted: bool) -> None:
         if self._highlight_border != highlighted:
             self._highlight_border = highlighted
+            self.update()
+
+    def set_corner_guides_visible(self, visible: bool) -> None:
+        if self._show_corner_guides != visible:
+            self._show_corner_guides = visible
             self.update()
 
     # ------------------------------------------------------------------
@@ -525,24 +567,25 @@ class _OverlayPreviewCanvas(QWidget):
             return
         painter.drawPixmap(dest_rect, self._pixmap, QRectF(0, 0, image_width, image_height))
 
-        corner_labels = ("1", "2", "3", "4")
-        corners = (
-            QPointF(dest_rect.left(), dest_rect.top()),
-            QPointF(dest_rect.right(), dest_rect.top()),
-            QPointF(dest_rect.right(), dest_rect.bottom()),
-            QPointF(dest_rect.left(), dest_rect.bottom()),
-        )
+        if self._show_corner_guides:
+            corner_labels = ("1", "2", "3", "4")
+            corners = (
+                QPointF(dest_rect.left(), dest_rect.top()),
+                QPointF(dest_rect.right(), dest_rect.top()),
+                QPointF(dest_rect.right(), dest_rect.bottom()),
+                QPointF(dest_rect.left(), dest_rect.bottom()),
+            )
 
-        handle_brush = QColor("#38bdf8")
-        handle_pen = QPen(QColor("#0f172a"), 1.5)
+            handle_brush = QColor("#38bdf8")
+            handle_pen = QPen(QColor("#0f172a"), 1.5)
 
-        for label, point in zip(corner_labels, corners):
-            marker_rect = QRectF(point.x() - 9.0, point.y() - 9.0, 18.0, 18.0)
-            painter.setBrush(handle_brush)
-            painter.setPen(handle_pen)
-            painter.drawEllipse(marker_rect)
-            painter.setPen(QPen(QColor("#0f172a")))
-            painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, label)
+            for label, point in zip(corner_labels, corners):
+                marker_rect = QRectF(point.x() - 9.0, point.y() - 9.0, 18.0, 18.0)
+                painter.setBrush(handle_brush)
+                painter.setPen(handle_pen)
+                painter.drawEllipse(marker_rect)
+                painter.setPen(QPen(QColor("#0f172a")))
+                painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, label)
 
         if self._auto_points:
             marker_color = QColor("#f97316")
@@ -647,6 +690,9 @@ class OverlayPreviewPanel(QWidget):
 
     def set_highlighted(self, highlighted: bool) -> None:
         self._canvas.set_highlighted(highlighted)
+
+    def set_corner_guides_visible(self, visible: bool) -> None:
+        self._canvas.set_corner_guides_visible(visible)
 
 
 class EditorView(QWidget):
@@ -900,6 +946,7 @@ class EditorView(QWidget):
         self._view.set_handles_visible(False)
         self._view.set_auto_markers([])
         self._preview_panel.set_auto_points([])
+        self._preview_panel.set_corner_guides_visible(False)
         self._update_auto_focus()
         self._update_instruction_text()
 
@@ -910,6 +957,7 @@ class EditorView(QWidget):
         self._auto_dest_points.clear()
         self._preview_panel.set_auto_points([])
         self._preview_panel.set_highlighted(False)
+        self._preview_panel.set_corner_guides_visible(True)
         self._view.set_auto_markers([])
         self._view.set_auto_click_enabled(False)
         self._view.set_auto_cursor(False)
@@ -1077,7 +1125,7 @@ class EditorView(QWidget):
 
         manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
         self._view.set_handles_visible(True)
-        self._view.set_manual_points(manual_points)
+        self._view.set_manual_points(manual_points, allow_outside=True)
 
         self._cancel_auto_mode(silent=True)
         self._current_mode = "manual"
