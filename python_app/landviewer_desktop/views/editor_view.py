@@ -152,6 +152,7 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
         self._line_thickness: float = 0.0
+        self._edge_smoothing: float = 0.0
         self._outline_thickness: float = 1.0
         self._outline_color_hex: str = "#FFFFFF"
         self._outline_color_rgb: Tuple[int, int, int] = (255, 255, 255)
@@ -167,7 +168,9 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
         self._effect_cached_image: Optional[np.ndarray] = None
-        self._effect_cache_key: Optional[Tuple[float, float, Tuple[int, int, int]]] = None
+        self._effect_cache_key: Optional[
+            Tuple[float, float, float, Tuple[int, int, int]]
+        ] = None
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -193,6 +196,7 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
         self._overlay_suppressed = False
+        self._edge_smoothing = 0.0
         self._outline_thickness = 1.0
         self._outline_color_hex = "#FFFFFF"
         self._outline_color_rgb = (255, 255, 255)
@@ -323,6 +327,16 @@ class EditorGraphicsView(QGraphicsView):
         if abs(self._line_thickness - clamped) < 1e-3:
             return
         self._line_thickness = clamped
+        self._effect_cache_key = None
+        self._update_overlay_pixmap()
+
+    def set_edge_smoothing(self, smoothing: float) -> None:
+        """Adjust the anti-alias smoothing radius applied to the overlay."""
+
+        clamped = max(0.0, min(smoothing, 5.0))
+        if abs(self._edge_smoothing - clamped) < 1e-3:
+            return
+        self._edge_smoothing = clamped
         self._effect_cache_key = None
         self._update_overlay_pixmap()
 
@@ -694,14 +708,16 @@ class EditorGraphicsView(QGraphicsView):
 
         line_radius = float(self._line_thickness)
         outline_radius = float(self._outline_thickness)
-        cache_key = (line_radius, outline_radius, self._outline_color_rgb)
+        smoothing = float(self._edge_smoothing)
+        cache_key = (line_radius, outline_radius, smoothing, self._outline_color_rgb)
 
         if (
             self._effect_cached_image is not None
             and self._effect_cache_key is not None
             and abs(self._effect_cache_key[0] - line_radius) < 1e-4
             and abs(self._effect_cache_key[1] - outline_radius) < 1e-4
-            and self._effect_cache_key[2] == self._outline_color_rgb
+            and abs(self._effect_cache_key[2] - smoothing) < 1e-4
+            and self._effect_cache_key[3] == self._outline_color_rgb
         ):
             return self._effect_cached_image
 
@@ -710,6 +726,7 @@ class EditorGraphicsView(QGraphicsView):
                 self._overlay_array,
                 line_radius,
                 outline_radius,
+                smoothing,
                 self._outline_color_rgb,
             )
         except cv2.error:
@@ -737,6 +754,7 @@ class EditorGraphicsView(QGraphicsView):
         image: np.ndarray,
         thickness: float,
         outline: float,
+        smoothing: float,
         outline_color: Tuple[int, int, int],
     ) -> np.ndarray:
         if image.ndim != 3 or image.shape[2] < 4:
@@ -750,6 +768,8 @@ class EditorGraphicsView(QGraphicsView):
         result = image.copy()
 
         filled_mask = mask
+        line_mask: Optional[np.ndarray] = None
+        outline_mask = np.zeros_like(mask, dtype=bool)
 
         if thickness > 0.0:
             kernel_radius = max(1, int(math.ceil(thickness)))
@@ -774,6 +794,8 @@ class EditorGraphicsView(QGraphicsView):
                 result[..., 3] = updated_alpha
 
             filled_mask = result[..., 3] > 0
+
+        line_mask = np.array(filled_mask, dtype=bool, copy=True)
 
         if np.any(filled_mask):
             rgb = result[..., :3]
@@ -805,6 +827,33 @@ class EditorGraphicsView(QGraphicsView):
                 rgb[outline_mask, 0] = r
                 rgb[outline_mask, 1] = g
                 rgb[outline_mask, 2] = b
+
+        if smoothing > 0.0:
+            smooth_radius = max(1, int(math.ceil(smoothing)))
+            kernel_size = smooth_radius * 2 + 1
+
+            alpha_plane = result[..., 3].astype(np.float32)
+            rgb_plane = result[..., :3].astype(np.float32)
+
+            blurred_alpha = cv2.GaussianBlur(alpha_plane, (kernel_size, kernel_size), 0)
+            blurred_rgb = cv2.GaussianBlur(rgb_plane, (kernel_size, kernel_size), 0)
+
+            if blurred_alpha is not None and blurred_rgb is not None:
+                updated_alpha = np.maximum(alpha_plane, blurred_alpha)
+                result[..., 3] = np.clip(updated_alpha, 0.0, 255.0).astype(np.uint8)
+                result[..., :3] = np.clip(blurred_rgb, 0.0, 255.0).astype(np.uint8)
+
+                rgb = result[..., :3]
+                if line_mask is not None and np.any(line_mask):
+                    rgb[line_mask, 0] = 255
+                    rgb[line_mask, 1] = 0
+                    rgb[line_mask, 2] = 0
+
+                if np.any(outline_mask):
+                    r, g, b = outline_color
+                    rgb[outline_mask, 0] = r
+                    rgb[outline_mask, 1] = g
+                    rgb[outline_mask, 2] = b
 
         return result.astype(np.uint8, copy=False)
 
@@ -1186,6 +1235,22 @@ class EditorView(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
+        self._edge_smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self._edge_smoothing_slider.setRange(0, 50)
+        self._edge_smoothing_slider.setPageStep(1)
+        default_smoothing = int(round(self._state.overlay.edge_smoothing * 10))
+        default_smoothing = max(0, min(default_smoothing, 50))
+        self._edge_smoothing_slider.setValue(default_smoothing)
+        self._edge_smoothing_slider.valueChanged.connect(
+            self._handle_edge_smoothing_changed
+        )
+
+        self._edge_smoothing_value_label = QLabel("Off")
+        self._edge_smoothing_value_label.setObjectName("overlaySmoothingValue")
+        self._edge_smoothing_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
         self._outline_color_button = QPushButton()
         self._outline_color_button.setObjectName("overlayOutlineColor")
         self._outline_color_button.setMinimumWidth(72)
@@ -1257,6 +1322,13 @@ class EditorView(QWidget):
         thickness_row.addWidget(self._line_thickness_value_label)
         layout.addLayout(thickness_row)
 
+        smoothing_row = QHBoxLayout()
+        smoothing_row.addSpacing(12)
+        smoothing_row.addWidget(QLabel("Edge smoothing"))
+        smoothing_row.addWidget(self._edge_smoothing_slider, stretch=1)
+        smoothing_row.addWidget(self._edge_smoothing_value_label)
+        layout.addLayout(smoothing_row)
+
         outline_row = QHBoxLayout()
         outline_row.addSpacing(12)
         outline_row.addWidget(QLabel("Outline"))
@@ -1278,6 +1350,7 @@ class EditorView(QWidget):
 
         self._set_outline_color_button(self._state.overlay.outline_color)
         self._update_outline_thickness_label(self._state.overlay.outline_thickness)
+        self._update_edge_smoothing_label(self._state.overlay.edge_smoothing)
 
         self._set_controls_enabled(False)
         self._controls_enabled = False
@@ -1334,6 +1407,12 @@ class EditorView(QWidget):
             self._line_thickness_slider.blockSignals(False)
             self._update_line_thickness_label(thickness)
             self._view.set_line_thickness(thickness)
+            smoothing = float(self._state.overlay.edge_smoothing)
+            self._edge_smoothing_slider.blockSignals(True)
+            self._edge_smoothing_slider.setValue(int(round(smoothing * 10)))
+            self._edge_smoothing_slider.blockSignals(False)
+            self._update_edge_smoothing_label(smoothing)
+            self._view.set_edge_smoothing(smoothing)
             outline = float(self._state.overlay.outline_thickness)
             self._outline_thickness_slider.blockSignals(True)
             self._outline_thickness_slider.setValue(int(round(outline * 10)))
@@ -1391,6 +1470,12 @@ class EditorView(QWidget):
         self._line_thickness_slider.blockSignals(False)
         self._update_line_thickness_label(thickness)
 
+        smoothing = float(self._state.overlay.edge_smoothing)
+        self._edge_smoothing_slider.blockSignals(True)
+        self._edge_smoothing_slider.setValue(int(round(smoothing * 10)))
+        self._edge_smoothing_slider.blockSignals(False)
+        self._update_edge_smoothing_label(smoothing)
+
         outline = float(self._state.overlay.outline_thickness)
         self._outline_thickness_slider.blockSignals(True)
         self._outline_thickness_slider.setValue(int(round(outline * 10)))
@@ -1399,6 +1484,7 @@ class EditorView(QWidget):
         self._set_outline_color_button(self._state.overlay.outline_color)
 
         self._view.set_line_thickness(thickness)
+        self._view.set_edge_smoothing(smoothing)
         self._view.set_outline_settings(self._state.overlay.outline_color, outline)
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
@@ -1451,6 +1537,12 @@ class EditorView(QWidget):
         self._state.overlay.line_thickness = thickness
         self._view.set_line_thickness(thickness)
         self._update_line_thickness_label(thickness)
+
+    def _handle_edge_smoothing_changed(self, value: int) -> None:
+        smoothing = max(0.0, min(value / 10.0, 5.0))
+        self._state.overlay.edge_smoothing = smoothing
+        self._view.set_edge_smoothing(smoothing)
+        self._update_edge_smoothing_label(smoothing)
 
     def _handle_outline_thickness_changed(self, value: int) -> None:
         thickness = max(0.0, min(value / 10.0, 6.0))
@@ -1943,6 +2035,7 @@ class EditorView(QWidget):
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
         self._line_thickness_slider.setEnabled(enabled)
+        self._edge_smoothing_slider.setEnabled(enabled)
         self._outline_thickness_slider.setEnabled(enabled)
         self._outline_color_button.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
@@ -1973,6 +2066,12 @@ class EditorView(QWidget):
             self._line_thickness_value_label.setText("Off")
         else:
             self._line_thickness_value_label.setText(f"{thickness:.1f} px")
+
+    def _update_edge_smoothing_label(self, smoothing: float) -> None:
+        if smoothing <= 0.001:
+            self._edge_smoothing_value_label.setText("Off")
+        else:
+            self._edge_smoothing_value_label.setText(f"{smoothing:.1f} px")
 
     def _update_outline_thickness_label(self, thickness: float) -> None:
         if thickness <= 0.001:
