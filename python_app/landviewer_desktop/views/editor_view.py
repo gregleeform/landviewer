@@ -4,7 +4,6 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
-import math
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal, QThread
@@ -30,7 +29,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from landviewer_desktop.services import image_io, color_filters
+from landviewer_desktop.services import image_io, color_filters, line_uniformity
 from landviewer_desktop.state import AppState, ColorFilterSetting
 from landviewer_desktop.views.color_filter_dialog import ColorFilterDialog
 
@@ -161,6 +160,9 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points: List[QPointF] = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
+        self._line_sketch: Optional[line_uniformity.LineSketch] = None
+        self._line_cached_image: Optional[np.ndarray] = None
+        self._line_cached_strength: Optional[float] = None
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -186,6 +188,9 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
         self._overlay_suppressed = False
+        self._line_sketch = None
+        self._line_cached_image = None
+        self._line_cached_strength = None
 
     def load_images(
         self,
@@ -275,6 +280,12 @@ class EditorGraphicsView(QGraphicsView):
             [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
             dtype=np.float32,
         )
+        try:
+            self._line_sketch = line_uniformity.prepare_sketch(self._overlay_array)
+        except cv2.error:
+            self._line_sketch = None
+        self._line_cached_image = None
+        self._line_cached_strength = None
         self._update_overlay_pixmap()
 
     def manual_points(self) -> List[QPointF]:
@@ -309,6 +320,7 @@ class EditorGraphicsView(QGraphicsView):
         if abs(self._line_balance_strength - clamped) < 1e-3:
             return
         self._line_balance_strength = clamped
+        self._line_cached_strength = None
         self._update_overlay_pixmap()
 
     def set_overlay_suppressed(self, suppressed: bool) -> None:
@@ -611,7 +623,7 @@ class EditorGraphicsView(QGraphicsView):
         try:
             matrix = cv2.getPerspectiveTransform(self._src_points, dst)
             warped = cv2.warpPerspective(
-                self._overlay_array,
+                self._overlay_for_warp(),
                 matrix,
                 (width, height),
                 flags=cv2.INTER_LINEAR,
@@ -623,12 +635,6 @@ class EditorGraphicsView(QGraphicsView):
             return
 
         result = warped
-        if self._line_balance_strength > 0.0:
-            try:
-                result = self._apply_line_balance(result)
-            except cv2.error:
-                result = warped
-
         if self._overlay_opacity < 1.0:
             alpha = result[..., 3].astype(np.float32)
             alpha *= self._overlay_opacity
@@ -660,47 +666,35 @@ class EditorGraphicsView(QGraphicsView):
         self._polygon_item.setPath(path)
         self._polygon_item.setVisible(True)
 
-    def _apply_line_balance(self, image: np.ndarray) -> np.ndarray:
-        """Thicken parcel strokes by blending with a dilated overlay."""
+    def _overlay_for_warp(self) -> np.ndarray:
+        if self._overlay_array is None:
+            raise RuntimeError("overlay not loaded")
+
+        if self._line_balance_strength <= 0.0 or self._line_sketch is None:
+            return self._overlay_array
 
         strength = float(self._line_balance_strength)
-        if strength <= 0.0:
-            return image
+        if (
+            self._line_cached_image is not None
+            and self._line_cached_strength is not None
+            and abs(self._line_cached_strength - strength) < 1e-4
+        ):
+            return self._line_cached_image
 
-        if image.ndim != 3 or image.shape[2] < 4:
-            return image
+        try:
+            rendered = line_uniformity.render_uniform_overlay(
+                self._overlay_array,
+                self._line_sketch,
+                strength,
+            )
+        except cv2.error:
+            rendered = self._overlay_array
+        else:
+            rendered = np.ascontiguousarray(rendered)
 
-        if not np.any(image[..., 3]):
-            return image
-
-        max_radius = 5.0
-        radius = max_radius * strength
-        if radius <= 0.0:
-            return image
-
-        kernel_radius = max(1, int(math.ceil(radius)))
-        kernel_size = kernel_radius * 2 + 1
-        kernel = cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
-        )
-
-        dilated = cv2.dilate(
-            image,
-            kernel,
-            iterations=1,
-            borderType=cv2.BORDER_CONSTANT,
-            borderValue=0,
-        )
-
-        blended = cv2.addWeighted(
-            image.astype(np.float32),
-            1.0 - strength,
-            dilated.astype(np.float32),
-            strength,
-            0.0,
-        )
-
-        return np.clip(blended, 0, 255).astype(np.uint8)
+        self._line_cached_image = rendered
+        self._line_cached_strength = strength
+        return rendered
 
 
 class _OverlayPreviewCanvas(QWidget):
