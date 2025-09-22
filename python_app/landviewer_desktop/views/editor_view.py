@@ -1988,9 +1988,9 @@ class EditorView(QWidget):
             "rgba(15, 23, 42, 0.6)" if text_color == "#0f172a" else "rgba(248, 250, 252, 0.6)"
         )
         style = (
-            f"QPushButton {{ background-color: {normalized}; color: {text_color};"
-            " border: 1px solid #1f2937; padding: 4px 12px; border-radius: 4px; }}"
-            f"QPushButton:disabled {{ background-color: {normalized}; color: {disabled_color}; }}"
+            f"QPushButton#overlayOutlineColor {{ background-color: {normalized}; color: {text_color};"
+            " border: 1px solid #1f2937; padding: 4px 12px; border-radius: 4px; }}\n"
+            f"QPushButton#overlayOutlineColor:disabled {{ background-color: {normalized}; color: {disabled_color}; }}"
         )
         self._outline_color_button.setStyleSheet(style)
         self._outline_color_button.setText(normalized)
