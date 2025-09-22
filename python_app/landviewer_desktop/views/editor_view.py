@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from typing import List, Optional, Sequence, Tuple
 
+import math
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -29,7 +31,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from landviewer_desktop.services import image_io, color_filters, line_uniformity
+from landviewer_desktop.services import image_io, color_filters
 from landviewer_desktop.state import AppState, ColorFilterSetting
 from landviewer_desktop.views.color_filter_dialog import ColorFilterDialog
 
@@ -148,7 +150,7 @@ class EditorGraphicsView(QGraphicsView):
         self._default_points: Optional[List[QPointF]] = None
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
-        self._line_balance_strength: float = 0.5
+        self._line_thickness: float = 0.0
         self._overlay_suppressed: bool = False
         self._suppress_point_updates = False
         self._handles_visible = True
@@ -160,9 +162,8 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points: List[QPointF] = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
-        self._line_sketch: Optional[line_uniformity.LineSketch] = None
-        self._line_cached_image: Optional[np.ndarray] = None
-        self._line_cached_strength: Optional[float] = None
+        self._thickness_cached_image: Optional[np.ndarray] = None
+        self._thickness_cached_radius: Optional[float] = None
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -188,9 +189,8 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
         self._overlay_suppressed = False
-        self._line_sketch = None
-        self._line_cached_image = None
-        self._line_cached_strength = None
+        self._thickness_cached_image = None
+        self._thickness_cached_radius = None
 
     def load_images(
         self,
@@ -280,12 +280,8 @@ class EditorGraphicsView(QGraphicsView):
             [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
             dtype=np.float32,
         )
-        try:
-            self._line_sketch = line_uniformity.prepare_sketch(self._overlay_array)
-        except cv2.error:
-            self._line_sketch = None
-        self._line_cached_image = None
-        self._line_cached_strength = None
+        self._thickness_cached_image = None
+        self._thickness_cached_radius = None
         self._update_overlay_pixmap()
 
     def manual_points(self) -> List[QPointF]:
@@ -313,14 +309,14 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_opacity = max(0.0, min(opacity, 1.0))
         self._update_overlay_pixmap()
 
-    def set_line_balance_strength(self, strength: float) -> None:
-        """Adjust the uniform line thickness enhancement strength."""
+    def set_line_thickness(self, thickness: float) -> None:
+        """Adjust the amount of overlay dilation applied before warping."""
 
-        clamped = max(0.0, min(strength, 1.0))
-        if abs(self._line_balance_strength - clamped) < 1e-3:
+        clamped = max(0.0, min(thickness, 3.0))
+        if abs(self._line_thickness - clamped) < 1e-3:
             return
-        self._line_balance_strength = clamped
-        self._line_cached_strength = None
+        self._line_thickness = clamped
+        self._thickness_cached_radius = None
         self._update_overlay_pixmap()
 
     def set_overlay_suppressed(self, suppressed: bool) -> None:
@@ -670,31 +666,55 @@ class EditorGraphicsView(QGraphicsView):
         if self._overlay_array is None:
             raise RuntimeError("overlay not loaded")
 
-        if self._line_balance_strength <= 0.0 or self._line_sketch is None:
+        if self._line_thickness <= 0.0:
             return self._overlay_array
 
-        strength = float(self._line_balance_strength)
+        thickness = float(self._line_thickness)
         if (
-            self._line_cached_image is not None
-            and self._line_cached_strength is not None
-            and abs(self._line_cached_strength - strength) < 1e-4
+            self._thickness_cached_image is not None
+            and self._thickness_cached_radius is not None
+            and abs(self._thickness_cached_radius - thickness) < 1e-4
         ):
-            return self._line_cached_image
+            return self._thickness_cached_image
 
         try:
-            rendered = line_uniformity.render_uniform_overlay(
-                self._overlay_array,
-                self._line_sketch,
-                strength,
-            )
+            rendered = self._apply_line_thickness(self._overlay_array, thickness)
         except cv2.error:
             rendered = self._overlay_array
         else:
             rendered = np.ascontiguousarray(rendered)
 
-        self._line_cached_image = rendered
-        self._line_cached_strength = strength
+        self._thickness_cached_image = rendered
+        self._thickness_cached_radius = thickness
         return rendered
+
+    @staticmethod
+    def _apply_line_thickness(image: np.ndarray, radius: float) -> np.ndarray:
+        if radius <= 0.0:
+            return image
+
+        if image.ndim != 3 or image.shape[2] < 4:
+            return image
+
+        alpha = image[..., 3]
+        if not np.any(alpha):
+            return image
+
+        mask = alpha > 0
+        inverted = np.where(mask, 0, 255).astype(np.uint8)
+        distances = cv2.distanceTransform(inverted, cv2.DIST_L2, 5)
+        expanded = mask | (distances <= float(radius))
+        if not np.any(expanded & ~mask):
+            return image
+
+        kernel_radius = max(1, int(math.ceil(radius)))
+        kernel_size = kernel_radius * 2 + 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+        dilated = cv2.dilate(image, kernel, iterations=1)
+
+        expanded_mask = expanded[..., None]
+        result = np.where(expanded_mask, dilated, image)
+        return result.astype(np.uint8, copy=False)
 
 
 class _OverlayPreviewCanvas(QWidget):
@@ -1062,15 +1082,15 @@ class EditorView(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
-        self._line_balance_slider = QSlider(Qt.Orientation.Horizontal)
-        self._line_balance_slider.setRange(0, 100)
-        self._line_balance_slider.setPageStep(5)
-        self._line_balance_slider.setValue(50)
-        self._line_balance_slider.valueChanged.connect(self._handle_line_balance_changed)
+        self._line_thickness_slider = QSlider(Qt.Orientation.Horizontal)
+        self._line_thickness_slider.setRange(0, 30)
+        self._line_thickness_slider.setPageStep(1)
+        self._line_thickness_slider.setValue(0)
+        self._line_thickness_slider.valueChanged.connect(self._handle_line_thickness_changed)
 
-        self._line_balance_value_label = QLabel("50%")
-        self._line_balance_value_label.setObjectName("overlayLineBalanceValue")
-        self._line_balance_value_label.setAlignment(
+        self._line_thickness_value_label = QLabel("0.0 px")
+        self._line_thickness_value_label.setObjectName("overlayLineBalanceValue")
+        self._line_thickness_value_label.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
@@ -1118,12 +1138,12 @@ class EditorView(QWidget):
         overlay_row.addWidget(self._opacity_value_label)
         layout.addLayout(overlay_row)
 
-        balance_row = QHBoxLayout()
-        balance_row.addSpacing(12)
-        balance_row.addWidget(QLabel("Line uniformity"))
-        balance_row.addWidget(self._line_balance_slider, stretch=1)
-        balance_row.addWidget(self._line_balance_value_label)
-        layout.addLayout(balance_row)
+        thickness_row = QHBoxLayout()
+        thickness_row.addSpacing(12)
+        thickness_row.addWidget(QLabel("Line thickness"))
+        thickness_row.addWidget(self._line_thickness_slider, stretch=1)
+        thickness_row.addWidget(self._line_thickness_value_label)
+        layout.addLayout(thickness_row)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -1185,12 +1205,12 @@ class EditorView(QWidget):
             self._image_info_label.setText(
                 "Upload a cadastral map and field photo, then crop the overlay to begin alignment."
             )
-            line_strength = float(self._state.overlay.line_balance_strength)
-            self._line_balance_slider.blockSignals(True)
-            self._line_balance_slider.setValue(int(round(line_strength * 100)))
-            self._line_balance_slider.blockSignals(False)
-            self._update_line_balance_label(line_strength)
-            self._view.set_line_balance_strength(line_strength)
+            thickness = float(self._state.overlay.line_thickness)
+            self._line_thickness_slider.blockSignals(True)
+            self._line_thickness_slider.setValue(int(round(thickness * 10)))
+            self._line_thickness_slider.blockSignals(False)
+            self._update_line_thickness_label(thickness)
+            self._view.set_line_thickness(thickness)
             self._manual_toggle.blockSignals(True)
             self._auto_toggle.blockSignals(True)
             self._manual_toggle.setChecked(True)
@@ -1232,13 +1252,13 @@ class EditorView(QWidget):
         self._opacity_slider.blockSignals(False)
         self._update_opacity_label(opacity)
 
-        line_strength = float(self._state.overlay.line_balance_strength)
-        self._line_balance_slider.blockSignals(True)
-        self._line_balance_slider.setValue(int(round(line_strength * 100)))
-        self._line_balance_slider.blockSignals(False)
-        self._update_line_balance_label(line_strength)
+        thickness = float(self._state.overlay.line_thickness)
+        self._line_thickness_slider.blockSignals(True)
+        self._line_thickness_slider.setValue(int(round(thickness * 10)))
+        self._line_thickness_slider.blockSignals(False)
+        self._update_line_thickness_label(thickness)
 
-        self._view.set_line_balance_strength(line_strength)
+        self._view.set_line_thickness(thickness)
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
 
@@ -1285,11 +1305,11 @@ class EditorView(QWidget):
             parts.append("Working with resized photo")
         return " — ".join(parts)
 
-    def _handle_line_balance_changed(self, value: int) -> None:
-        strength = max(0.0, min(value / 100.0, 1.0))
-        self._state.overlay.line_balance_strength = strength
-        self._view.set_line_balance_strength(strength)
-        self._update_line_balance_label(strength)
+    def _handle_line_thickness_changed(self, value: int) -> None:
+        thickness = max(0.0, min(value / 10.0, 3.0))
+        self._state.overlay.line_thickness = thickness
+        self._view.set_line_thickness(thickness)
+        self._update_line_thickness_label(thickness)
 
     def _handle_opacity_changed(self, value: int) -> None:
         opacity = max(0.0, min(value / 100.0, 1.0))
@@ -1759,7 +1779,7 @@ class EditorView(QWidget):
         self._controls_enabled = enabled
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
-        self._line_balance_slider.setEnabled(enabled)
+        self._line_thickness_slider.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
         self._manual_toggle.setEnabled(enabled)
@@ -1783,12 +1803,11 @@ class EditorView(QWidget):
         percentage = int(round(opacity * 100))
         self._opacity_value_label.setText(f"{percentage}%")
 
-    def _update_line_balance_label(self, strength: float) -> None:
-        if strength <= 0.001:
-            self._line_balance_value_label.setText("Off")
+    def _update_line_thickness_label(self, thickness: float) -> None:
+        if thickness <= 0.001:
+            self._line_thickness_value_label.setText("Off")
         else:
-            percentage = int(round(strength * 100))
-            self._line_balance_value_label.setText(f"{percentage}%")
+            self._line_thickness_value_label.setText(f"{thickness:.1f} px")
 
     def _shutdown_color_threads(self) -> None:
         """Ensure background colour filter threads exit before destruction."""
