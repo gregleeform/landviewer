@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from PIL import Image
 
@@ -15,6 +15,14 @@ class AppStage(Enum):
     UPLOAD = auto()
     CROP = auto()
     EDIT = auto()
+
+
+@dataclass(slots=True)
+class ColorFilterSetting:
+    """Represents a single keep/remove colour filter configuration."""
+
+    color: str = "#000000"
+    tolerance: int = 50
 
 
 @dataclass(slots=True)
@@ -45,13 +53,24 @@ class OverlaySettings:
     show_overlay: bool = True
     opacity: float = 0.65
     manual_points: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
+    color_filters_keep: List[ColorFilterSetting] = field(default_factory=list)
+    color_filters_remove: List[ColorFilterSetting] = field(default_factory=list)
+    filtered_overlay: Optional[Image.Image] = None
 
     def reset(self) -> None:
         """Restore default overlay configuration."""
 
         self.show_overlay = True
         self.opacity = 0.65
+        self.clear_alignment()
+
+    def clear_alignment(self) -> None:
+        """Drop stored alignment and colour filter state."""
+
         self.manual_points = None
+        self.filtered_overlay = None
+        self.color_filters_keep = []
+        self.color_filters_remove = []
 
 
 @dataclass(slots=True)

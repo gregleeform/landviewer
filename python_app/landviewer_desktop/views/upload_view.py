@@ -185,4 +185,4 @@ class UploadView(QWidget):
     def _reset_overlay_alignment(self) -> None:
         """Clear any stored overlay alignment when images change."""
 
-        self._state.overlay.manual_points = None
+        self._state.overlay.clear_alignment()

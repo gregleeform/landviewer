@@ -23,8 +23,9 @@ View your app in AI Studio: https://ai.studio/apps/drive/11PQyrPZPjrgqLpjauM5lbU
 
 The `python_app/` directory contains an in-progress PySide6 port of the Landviewer app.
 The current prototype reproduces the upload workflow, offers an interactive cadastral crop
-workspace, and now includes both manual and guided automatic pinning tools so you can align
-the cadastral overlay on top of the field photo directly on the desktop.
+workspace, and now includes both manual and guided automatic pinning tools along with the
+advanced colour filter dialog so you can isolate parcel lines before aligning the overlay on
+top of the field photo directly on the desktop.
 
 ### Run the desktop prototype
 

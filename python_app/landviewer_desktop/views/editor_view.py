@@ -6,11 +6,12 @@ from typing import List, Optional, Sequence, Tuple
 import cv2
 import numpy as np
 from PIL import Image
-from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal, QThread
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsSimpleTextItem,
@@ -28,8 +29,9 @@ from PySide6.QtWidgets import (
     QSizePolicy,
 )
 
-from landviewer_desktop.services import image_io
-from landviewer_desktop.state import AppState
+from landviewer_desktop.services import image_io, color_filters
+from landviewer_desktop.state import AppState, ColorFilterSetting
+from landviewer_desktop.views.color_filter_dialog import ColorFilterDialog
 
 
 class OverlayHandle(QObject, QGraphicsEllipseItem):
@@ -88,6 +90,34 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
         """Change the clamp rectangle; ``None`` disables clamping."""
 
         self._bounds = QRectF(bounds) if bounds is not None else None
+
+
+class _ColorFilterWorker(QObject):
+    """Background worker that applies colour filters to the overlay image."""
+
+    finished = Signal(int, object)
+    failed = Signal(int, str)
+
+    def __init__(
+        self,
+        token: int,
+        image: Image.Image,
+        keep_filters: Sequence[ColorFilterSetting],
+        remove_filters: Sequence[ColorFilterSetting],
+    ) -> None:
+        super().__init__()
+        self._token = token
+        self._image = image.copy()
+        self._keep = tuple(ColorFilterSetting(f.color, f.tolerance) for f in keep_filters)
+        self._remove = tuple(ColorFilterSetting(f.color, f.tolerance) for f in remove_filters)
+
+    def process(self) -> None:
+        try:
+            result = color_filters.apply_color_filters(self._image, self._keep, self._remove)
+        except Exception as exc:  # pragma: no cover - defensive guard
+            self.failed.emit(self._token, str(exc))
+        else:
+            self.finished.emit(self._token, result)
 
 
 class EditorGraphicsView(QGraphicsView):
@@ -176,14 +206,6 @@ class EditorGraphicsView(QGraphicsView):
             self._refit_view()
             return
 
-        self._overlay_image = overlay_image
-        self._overlay_array = np.array(overlay_image.convert("RGBA"))
-        height, width = self._overlay_array.shape[:2]
-        self._src_points = np.array(
-            [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
-            dtype=np.float32,
-        )
-
         self._overlay_item = QGraphicsPixmapItem()
         self._overlay_item.setZValue(1)
         self._overlay_item.setVisible(False)
@@ -197,6 +219,8 @@ class EditorGraphicsView(QGraphicsView):
         self._polygon_item.setZValue(2)
         self._polygon_item.setVisible(False)
         self._scene.addItem(self._polygon_item)
+
+        self.update_overlay_image(overlay_image)
 
         emit_points_after_load = True
         if manual_points and len(manual_points) == 4:
@@ -232,6 +256,24 @@ class EditorGraphicsView(QGraphicsView):
             self._emit_points()
 
         self._refit_view()
+
+    def update_overlay_image(self, overlay_image: Optional[Image.Image]) -> None:
+        """Update the cached overlay image and refresh the warped preview."""
+
+        self._overlay_image = overlay_image
+        if overlay_image is None:
+            self._overlay_array = None
+            self._src_points = None
+            self._update_overlay_pixmap()
+            return
+
+        self._overlay_array = np.array(overlay_image.convert("RGBA"))
+        height, width = self._overlay_array.shape[:2]
+        self._src_points = np.array(
+            [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
+            dtype=np.float32,
+        )
+        self._update_overlay_pixmap()
 
     def manual_points(self) -> List[QPointF]:
         """Return the currently tracked manual points."""
@@ -528,7 +570,11 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles = []
 
     def _update_overlay_pixmap(self) -> None:
-        if not self._overlay_item or self._overlay_array is None or self._src_points is None:
+        if not self._overlay_item:
+            return
+
+        if self._overlay_array is None or self._src_points is None:
+            self._overlay_item.setVisible(False)
             return
 
         if self._overlay_suppressed:
@@ -966,6 +1012,18 @@ class EditorView(QWidget):
         self._reset_pins_button = QPushButton("Reset pins")
         self._reset_pins_button.clicked.connect(self._handle_reset_pins)
 
+        self._color_filter_button = QPushButton("Color filters…")
+        self._color_filter_button.setEnabled(False)
+        self._color_filter_button.clicked.connect(self._show_color_filter_dialog)
+
+        self._status_label = QLabel("")
+        self._status_label.setObjectName("editorStatusLabel")
+        self._status_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+        self._status_label.setMinimumWidth(160)
+        self._status_label.hide()
+
         self._restart_button = QPushButton("Start over")
         self._restart_button.clicked.connect(self.restart_requested.emit)
 
@@ -996,14 +1054,20 @@ class EditorView(QWidget):
         layout.addLayout(overlay_row)
 
         button_row = QHBoxLayout()
+        button_row.setSpacing(8)
+        button_row.addWidget(self._color_filter_button)
         button_row.addWidget(self._reset_pins_button)
         button_row.addStretch(1)
+        button_row.addWidget(self._status_label)
         button_row.addWidget(self._restart_button)
         layout.addLayout(button_row)
 
         self.setLayout(layout)
 
         self._set_controls_enabled(False)
+        self._controls_enabled = False
+        self._processing_colors = False
+        self._base_overlay_image: Optional[Image.Image] = None
         self._current_overlay_image: Optional[Image.Image] = None
         self._auto_active = False
         self._auto_step = 0
@@ -1011,23 +1075,34 @@ class EditorView(QWidget):
         self._auto_dest_points: List[QPointF] = []
         self._current_mode = "manual"
         self._auto_finished = False
+        self._color_processing_token = 0
+        self._latest_color_token = 0
+        self._color_threads: dict[int, QThread] = {}
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:
         """Synchronise the editor with the latest application state."""
 
         photo = self._state.photo.image
-        overlay = self._state.cadastral.cropped_image
+        base_overlay = self._state.cadastral.cropped_image
+        filtered_overlay = self._state.overlay.filtered_overlay
 
-        self._current_overlay_image = overlay
-        self._preview_panel.set_overlay_image(overlay)
+        self._processing_colors = False
+        self._status_label.hide()
+        self._status_label.clear()
         self._preview_panel.set_auto_points([])
         self._preview_panel.set_highlighted(False)
         self._view.set_auto_markers([])
         self._view.set_auto_click_enabled(False)
         self._view.set_auto_cursor(False)
+        self._base_overlay_image = base_overlay
+        self._color_processing_token += 1
+        self._latest_color_token = self._color_processing_token
 
-        if photo is None or overlay is None:
+        if photo is None or base_overlay is None:
+            self._state.overlay.filtered_overlay = None
+            self._current_overlay_image = None
+            self._preview_panel.set_overlay_image(base_overlay)
             self._cancel_auto_mode(silent=True)
             self._view.clear()
             self._view.setEnabled(False)
@@ -1043,18 +1118,21 @@ class EditorView(QWidget):
             self._auto_toggle.blockSignals(False)
             self._current_mode = "manual"
             self._instruction_label.setText(self._MANUAL_INSTRUCTION)
+            self._update_color_filter_button_state()
             return
 
         self._cancel_auto_mode(silent=True)
         photo_pixmap = image_io.image_to_qpixmap(photo)
         manual_points = self._state.overlay.manual_points
-        if manual_points:
+        if manual_points and len(manual_points) == 4:
             point_sequence: Optional[Sequence[Tuple[float, float]]] = manual_points
         else:
             point_sequence = None
 
-        self._view.load_images(photo_pixmap, overlay, point_sequence)
+        display_overlay = filtered_overlay or base_overlay
+        self._view.load_images(photo_pixmap, display_overlay, point_sequence)
         self._view.setEnabled(True)
+        self._set_display_overlay(display_overlay)
 
         if self._state.overlay.manual_points is None:
             current_points = self._view.manual_points()
@@ -1086,8 +1164,21 @@ class EditorView(QWidget):
         self._update_instruction_text()
 
         self._image_info_label.setText(
-            self._build_info_text(photo.size, overlay.size, self._state.photo.resized_for_performance)
+            self._build_info_text(
+                photo.size,
+                base_overlay.size,
+                self._state.photo.resized_for_performance,
+            )
         )
+
+        has_filters = bool(
+            self._state.overlay.color_filters_keep
+            or self._state.overlay.color_filters_remove
+        )
+        if has_filters and filtered_overlay is None:
+            self._apply_color_filters()
+        else:
+            self._update_color_filter_button_state()
 
     # ------------------------------------------------------------------
     def _build_info_text(
@@ -1115,6 +1206,108 @@ class EditorView(QWidget):
     def _handle_overlay_visibility(self, checked: bool) -> None:
         self._state.overlay.show_overlay = checked
         self._view.set_overlay_settings(checked, self._state.overlay.opacity)
+
+    def _show_color_filter_dialog(self) -> None:
+        if self._base_overlay_image is None:
+            return
+
+        dialog = ColorFilterDialog(
+            self._state.overlay.color_filters_keep,
+            self._state.overlay.color_filters_remove,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        keep_filters, remove_filters = dialog.filters()
+        if (
+            keep_filters == self._state.overlay.color_filters_keep
+            and remove_filters == self._state.overlay.color_filters_remove
+        ):
+            self._update_color_filter_button_state()
+            return
+
+        self._state.overlay.color_filters_keep = keep_filters
+        self._state.overlay.color_filters_remove = remove_filters
+        self._apply_color_filters()
+
+    def _apply_color_filters(self) -> None:
+        overlay = self._base_overlay_image
+        if overlay is None:
+            return
+
+        keep_filters = list(self._state.overlay.color_filters_keep)
+        remove_filters = list(self._state.overlay.color_filters_remove)
+
+        if not keep_filters and not remove_filters:
+            self._state.overlay.filtered_overlay = None
+            self._processing_colors = False
+            self._status_label.hide()
+            self._status_label.clear()
+            self._set_display_overlay(overlay)
+            self._update_color_filter_button_state()
+            return
+
+        self._processing_colors = True
+        self._status_label.setText("Processing colours…")
+        self._status_label.show()
+        self._update_color_filter_button_state()
+
+        self._color_processing_token += 1
+        token = self._color_processing_token
+        self._latest_color_token = token
+
+        worker = _ColorFilterWorker(token, overlay, keep_filters, remove_filters)
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.process)
+        worker.finished.connect(self._handle_color_processing_finished)
+        worker.failed.connect(self._handle_color_processing_failed)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.failed.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda token=token: self._color_threads.pop(token, None))
+        self._color_threads[token] = thread
+        thread.start()
+
+    def _handle_color_processing_finished(self, token: int, image_obj: object) -> None:
+        if token != self._latest_color_token:
+            return
+
+        self._processing_colors = False
+        self._status_label.hide()
+        self._status_label.clear()
+
+        if not isinstance(image_obj, Image.Image):
+            self._update_color_filter_button_state()
+            return
+
+        self._state.overlay.filtered_overlay = image_obj
+        self._set_display_overlay(image_obj)
+        self._update_color_filter_button_state()
+
+    def _handle_color_processing_failed(self, token: int, message: str) -> None:
+        if token != self._latest_color_token:
+            return
+
+        self._processing_colors = False
+        self._status_label.hide()
+        self._status_label.clear()
+        self._state.overlay.filtered_overlay = None
+
+        if self._base_overlay_image is not None:
+            self._set_display_overlay(self._base_overlay_image)
+
+        if message:
+            detail_text = f"Unable to process the overlay colours.\n\n{message}"
+        else:
+            detail_text = "Unable to process the overlay colours."
+
+        QMessageBox.critical(self, "Colour filtering failed", detail_text)
+
+        self._update_color_filter_button_state()
 
     def _handle_points_changed(self, points: list) -> None:
         if len(points) != 4:
@@ -1466,12 +1659,27 @@ class EditorView(QWidget):
         self._view.set_auto_adjust_points(self._auto_dest_points)
 
     def _set_controls_enabled(self, enabled: bool) -> None:
+        self._controls_enabled = enabled
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
         self._manual_toggle.setEnabled(enabled)
         self._auto_toggle.setEnabled(enabled)
+        self._update_color_filter_button_state()
+
+    def _update_color_filter_button_state(self) -> None:
+        ready = (
+            self._controls_enabled
+            and self._base_overlay_image is not None
+            and not self._processing_colors
+        )
+        self._color_filter_button.setEnabled(ready)
+
+    def _set_display_overlay(self, image: Optional[Image.Image]) -> None:
+        self._current_overlay_image = image
+        self._view.update_overlay_image(image)
+        self._preview_panel.set_overlay_image(image)
 
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))

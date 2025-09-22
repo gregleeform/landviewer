@@ -344,7 +344,7 @@ class CropView(QWidget):
         selection.crop_rect = None
         self._current_rotated_image = None
         self._view.clear_selection()
-        self._state.overlay.manual_points = None
+        self._state.overlay.clear_alignment()
         self.refresh()
 
     def _commit_crop(self) -> None:
@@ -374,6 +374,6 @@ class CropView(QWidget):
         cropped = rotated_image.crop((left, top, right, bottom))
         self._state.cadastral.cropped_image = cropped
         self._state.cadastral.crop_rect = (left, top, right, bottom)
-        self._state.overlay.manual_points = None
+        self._state.overlay.clear_alignment()
 
         self.proceed_requested.emit()
