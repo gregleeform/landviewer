@@ -13,6 +13,7 @@ from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QDialog,
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -151,6 +152,9 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
         self._line_thickness: float = 0.0
+        self._outline_thickness: float = 1.0
+        self._outline_color_hex: str = "#FFFFFF"
+        self._outline_color_rgb: Tuple[int, int, int] = (255, 255, 255)
         self._overlay_suppressed: bool = False
         self._suppress_point_updates = False
         self._handles_visible = True
@@ -162,8 +166,8 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points: List[QPointF] = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
-        self._thickness_cached_image: Optional[np.ndarray] = None
-        self._thickness_cached_radius: Optional[float] = None
+        self._effect_cached_image: Optional[np.ndarray] = None
+        self._effect_cache_key: Optional[Tuple[float, float, Tuple[int, int, int]]] = None
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -189,8 +193,11 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
         self._overlay_suppressed = False
-        self._thickness_cached_image = None
-        self._thickness_cached_radius = None
+        self._outline_thickness = 1.0
+        self._outline_color_hex = "#FFFFFF"
+        self._outline_color_rgb = (255, 255, 255)
+        self._effect_cached_image = None
+        self._effect_cache_key = None
 
     def load_images(
         self,
@@ -280,8 +287,8 @@ class EditorGraphicsView(QGraphicsView):
             [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]],
             dtype=np.float32,
         )
-        self._thickness_cached_image = None
-        self._thickness_cached_radius = None
+        self._effect_cached_image = None
+        self._effect_cache_key = None
         self._update_overlay_pixmap()
 
     def manual_points(self) -> List[QPointF]:
@@ -316,8 +323,27 @@ class EditorGraphicsView(QGraphicsView):
         if abs(self._line_thickness - clamped) < 1e-3:
             return
         self._line_thickness = clamped
-        self._thickness_cached_radius = None
+        self._effect_cache_key = None
         self._update_overlay_pixmap()
+
+    def set_outline_settings(self, color: str, thickness: float) -> None:
+        """Update outline colour and thickness settings."""
+
+        normalized, rgb = self._normalise_color(color)
+        clamped = max(0.0, min(thickness, 6.0))
+
+        changed = False
+        if abs(self._outline_thickness - clamped) >= 1e-3:
+            self._outline_thickness = clamped
+            changed = True
+        if self._outline_color_hex != normalized:
+            self._outline_color_hex = normalized
+            self._outline_color_rgb = rgb
+            changed = True
+
+        if changed:
+            self._effect_cache_key = None
+            self._update_overlay_pixmap()
 
     def set_overlay_suppressed(self, suppressed: bool) -> None:
         """Temporarily hide the overlay regardless of visibility settings."""
@@ -666,30 +692,53 @@ class EditorGraphicsView(QGraphicsView):
         if self._overlay_array is None:
             raise RuntimeError("overlay not loaded")
 
-        if self._line_thickness <= 0.0:
-            return self._overlay_array
+        line_radius = float(self._line_thickness)
+        outline_radius = float(self._outline_thickness)
+        cache_key = (line_radius, outline_radius, self._outline_color_rgb)
 
-        thickness = float(self._line_thickness)
         if (
-            self._thickness_cached_image is not None
-            and self._thickness_cached_radius is not None
-            and abs(self._thickness_cached_radius - thickness) < 1e-4
+            self._effect_cached_image is not None
+            and self._effect_cache_key is not None
+            and abs(self._effect_cache_key[0] - line_radius) < 1e-4
+            and abs(self._effect_cache_key[1] - outline_radius) < 1e-4
+            and self._effect_cache_key[2] == self._outline_color_rgb
         ):
-            return self._thickness_cached_image
+            return self._effect_cached_image
 
         try:
-            rendered = self._apply_line_thickness(self._overlay_array, thickness)
+            rendered = self._apply_strokes(
+                self._overlay_array,
+                line_radius,
+                outline_radius,
+                self._outline_color_rgb,
+            )
         except cv2.error:
             rendered = self._overlay_array
         else:
-            rendered = np.ascontiguousarray(rendered)
+            if rendered is not self._overlay_array:
+                rendered = np.ascontiguousarray(rendered)
 
-        self._thickness_cached_image = rendered
-        self._thickness_cached_radius = thickness
+        self._effect_cached_image = rendered
+        self._effect_cache_key = cache_key
         return rendered
 
     @staticmethod
-    def _apply_line_thickness(image: np.ndarray, radius: float) -> np.ndarray:
+    def _normalise_color(value: str) -> Tuple[str, Tuple[int, int, int]]:
+        color = QColor(value)
+        if not color.isValid():
+            color = QColor("#FFFFFF")
+        return (
+            color.name(QColor.NameFormat.HexRgb).upper(),
+            (color.red(), color.green(), color.blue()),
+        )
+
+    @staticmethod
+    def _apply_strokes(
+        image: np.ndarray,
+        thickness: float,
+        outline: float,
+        outline_color: Tuple[int, int, int],
+    ) -> np.ndarray:
         if image.ndim != 3 or image.shape[2] < 4:
             return image
 
@@ -700,38 +749,62 @@ class EditorGraphicsView(QGraphicsView):
         mask = alpha > 0
         result = image.copy()
 
-        if radius <= 0.0:
-            rgb = result[..., :3]
-            rgb[mask, 0] = 255
-            rgb[mask, 1] = 0
-            rgb[mask, 2] = 0
-            return result.astype(np.uint8, copy=False)
+        filled_mask = mask
 
-        kernel_radius = max(1, int(math.ceil(radius)))
-        kernel_size = kernel_radius * 2 + 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-        alpha_mask = np.where(mask, 255, 0).astype(np.uint8)
-        dilated_alpha = cv2.dilate(alpha_mask, kernel, iterations=1)
-
-        inverted = np.where(mask, 0, 255).astype(np.uint8)
-        distances = cv2.distanceTransform(inverted, cv2.DIST_L2, 5)
-        expanded = np.logical_or(mask, distances <= float(radius))
-
-        updated_alpha = result[..., 3]
-        if np.any(expanded):
-            updated_alpha = updated_alpha.copy()
-            updated_alpha[expanded] = np.maximum(
-                updated_alpha[expanded], dilated_alpha[expanded]
+        if thickness > 0.0:
+            kernel_radius = max(1, int(math.ceil(thickness)))
+            kernel_size = kernel_radius * 2 + 1
+            kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
             )
-            result[..., 3] = updated_alpha
 
-        filled = result[..., 3] > 0
-        if np.any(filled):
+            alpha_mask = np.where(mask, 255, 0).astype(np.uint8)
+            dilated_alpha = cv2.dilate(alpha_mask, kernel, iterations=1)
+
+            inverted = np.where(mask, 0, 255).astype(np.uint8)
+            distances = cv2.distanceTransform(inverted, cv2.DIST_L2, 5)
+            expanded = np.logical_or(mask, distances <= float(thickness))
+
+            updated_alpha = result[..., 3]
+            if np.any(expanded):
+                updated_alpha = updated_alpha.copy()
+                updated_alpha[expanded] = np.maximum(
+                    updated_alpha[expanded], dilated_alpha[expanded]
+                )
+                result[..., 3] = updated_alpha
+
+            filled_mask = result[..., 3] > 0
+
+        if np.any(filled_mask):
             rgb = result[..., :3]
-            rgb[filled, 0] = 255
-            rgb[filled, 1] = 0
-            rgb[filled, 2] = 0
+            rgb[filled_mask, 0] = 255
+            rgb[filled_mask, 1] = 0
+            rgb[filled_mask, 2] = 0
+
+        if outline > 0.0:
+            outline_radius = max(1, int(math.ceil(outline)))
+            outline_size = outline_radius * 2 + 1
+            outline_kernel = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (outline_size, outline_size)
+            )
+
+            base_mask = result[..., 3] > 0
+            base_alpha = np.where(base_mask, 255, 0).astype(np.uint8)
+            expanded = cv2.dilate(base_alpha, outline_kernel, iterations=1)
+            outline_mask = np.logical_and(expanded > 0, ~base_mask)
+
+            if np.any(outline_mask):
+                updated_alpha = result[..., 3].copy()
+                updated_alpha[outline_mask] = np.maximum(
+                    updated_alpha[outline_mask], expanded[outline_mask]
+                )
+                result[..., 3] = updated_alpha
+
+                rgb = result[..., :3]
+                r, g, b = outline_color
+                rgb[outline_mask, 0] = r
+                rgb[outline_mask, 1] = g
+                rgb[outline_mask, 2] = b
 
         return result.astype(np.uint8, copy=False)
 
@@ -1113,6 +1186,26 @@ class EditorView(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
+        self._outline_color_button = QPushButton()
+        self._outline_color_button.setObjectName("overlayOutlineColor")
+        self._outline_color_button.setMinimumWidth(72)
+        self._outline_color_button.clicked.connect(self._choose_outline_color)
+
+        self._outline_thickness_slider = QSlider(Qt.Orientation.Horizontal)
+        self._outline_thickness_slider.setRange(0, 60)
+        self._outline_thickness_slider.setPageStep(1)
+        default_outline = int(round(self._state.overlay.outline_thickness * 10))
+        self._outline_thickness_slider.setValue(default_outline)
+        self._outline_thickness_slider.valueChanged.connect(
+            self._handle_outline_thickness_changed
+        )
+
+        self._outline_thickness_value_label = QLabel("1.0 px")
+        self._outline_thickness_value_label.setObjectName("overlayOutlineValue")
+        self._outline_thickness_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
         self._reset_pins_button = QPushButton("Reset pins")
         self._reset_pins_button.clicked.connect(self._handle_reset_pins)
 
@@ -1164,6 +1257,14 @@ class EditorView(QWidget):
         thickness_row.addWidget(self._line_thickness_value_label)
         layout.addLayout(thickness_row)
 
+        outline_row = QHBoxLayout()
+        outline_row.addSpacing(12)
+        outline_row.addWidget(QLabel("Outline"))
+        outline_row.addWidget(self._outline_color_button)
+        outline_row.addWidget(self._outline_thickness_slider, stretch=1)
+        outline_row.addWidget(self._outline_thickness_value_label)
+        layout.addLayout(outline_row)
+
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
         button_row.addWidget(self._color_filter_button)
@@ -1174,6 +1275,9 @@ class EditorView(QWidget):
         layout.addLayout(button_row)
 
         self.setLayout(layout)
+
+        self._set_outline_color_button(self._state.overlay.outline_color)
+        self._update_outline_thickness_label(self._state.overlay.outline_thickness)
 
         self._set_controls_enabled(False)
         self._controls_enabled = False
@@ -1230,6 +1334,16 @@ class EditorView(QWidget):
             self._line_thickness_slider.blockSignals(False)
             self._update_line_thickness_label(thickness)
             self._view.set_line_thickness(thickness)
+            outline = float(self._state.overlay.outline_thickness)
+            self._outline_thickness_slider.blockSignals(True)
+            self._outline_thickness_slider.setValue(int(round(outline * 10)))
+            self._outline_thickness_slider.blockSignals(False)
+            self._update_outline_thickness_label(outline)
+            self._set_outline_color_button(self._state.overlay.outline_color)
+            self._view.set_outline_settings(
+                self._state.overlay.outline_color,
+                outline,
+            )
             self._manual_toggle.blockSignals(True)
             self._auto_toggle.blockSignals(True)
             self._manual_toggle.setChecked(True)
@@ -1277,7 +1391,15 @@ class EditorView(QWidget):
         self._line_thickness_slider.blockSignals(False)
         self._update_line_thickness_label(thickness)
 
+        outline = float(self._state.overlay.outline_thickness)
+        self._outline_thickness_slider.blockSignals(True)
+        self._outline_thickness_slider.setValue(int(round(outline * 10)))
+        self._outline_thickness_slider.blockSignals(False)
+        self._update_outline_thickness_label(outline)
+        self._set_outline_color_button(self._state.overlay.outline_color)
+
         self._view.set_line_thickness(thickness)
+        self._view.set_outline_settings(self._state.overlay.outline_color, outline)
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
 
@@ -1330,6 +1452,12 @@ class EditorView(QWidget):
         self._view.set_line_thickness(thickness)
         self._update_line_thickness_label(thickness)
 
+    def _handle_outline_thickness_changed(self, value: int) -> None:
+        thickness = max(0.0, min(value / 10.0, 6.0))
+        self._state.overlay.outline_thickness = thickness
+        self._view.set_outline_settings(self._state.overlay.outline_color, thickness)
+        self._update_outline_thickness_label(thickness)
+
     def _handle_opacity_changed(self, value: int) -> None:
         opacity = max(0.0, min(value / 100.0, 1.0))
         self._state.overlay.opacity = opacity
@@ -1339,6 +1467,22 @@ class EditorView(QWidget):
     def _handle_overlay_visibility(self, checked: bool) -> None:
         self._state.overlay.show_overlay = checked
         self._view.set_overlay_settings(checked, self._state.overlay.opacity)
+
+    def _choose_outline_color(self) -> None:
+        initial = QColor(self._state.overlay.outline_color)
+        if not initial.isValid():
+            initial = QColor("#FFFFFF")
+        color = QColorDialog.getColor(initial, self, "Select outline colour")
+        if not color.isValid():
+            return
+
+        normalized, _ = EditorGraphicsView._normalise_color(color.name())
+        if normalized == self._state.overlay.outline_color:
+            return
+
+        self._state.overlay.outline_color = normalized
+        self._set_outline_color_button(normalized)
+        self._view.set_outline_settings(normalized, self._state.overlay.outline_thickness)
 
     def _show_color_filter_dialog(self) -> None:
         if self._base_overlay_image is None:
@@ -1799,6 +1943,8 @@ class EditorView(QWidget):
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
         self._line_thickness_slider.setEnabled(enabled)
+        self._outline_thickness_slider.setEnabled(enabled)
+        self._outline_color_button.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
         self._manual_toggle.setEnabled(enabled)
@@ -1827,6 +1973,28 @@ class EditorView(QWidget):
             self._line_thickness_value_label.setText("Off")
         else:
             self._line_thickness_value_label.setText(f"{thickness:.1f} px")
+
+    def _update_outline_thickness_label(self, thickness: float) -> None:
+        if thickness <= 0.001:
+            self._outline_thickness_value_label.setText("Off")
+        else:
+            self._outline_thickness_value_label.setText(f"{thickness:.1f} px")
+
+    def _set_outline_color_button(self, color: str) -> None:
+        normalized, rgb = EditorGraphicsView._normalise_color(color)
+        brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+        text_color = "#0f172a" if brightness > 160 else "#f8fafc"
+        disabled_color = (
+            "rgba(15, 23, 42, 0.6)" if text_color == "#0f172a" else "rgba(248, 250, 252, 0.6)"
+        )
+        style = (
+            f"QPushButton {{ background-color: {normalized}; color: {text_color};"
+            " border: 1px solid #1f2937; padding: 4px 12px; border-radius: 4px; }}"
+            f"QPushButton:disabled {{ background-color: {normalized}; color: {disabled_color}; }}"
+        )
+        self._outline_color_button.setStyleSheet(style)
+        self._outline_color_button.setText(normalized)
+        self._outline_color_button.setToolTip(f"Outline colour: {normalized}")
 
     def _shutdown_color_threads(self) -> None:
         """Ensure background colour filter threads exit before destruction."""

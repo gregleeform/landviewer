@@ -68,6 +68,8 @@ class OverlaySettings:
     show_overlay: bool = True
     opacity: float = 0.65
     line_thickness: float = 0.0
+    outline_thickness: float = 1.0
+    outline_color: str = "#FFFFFF"
     manual_points: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
     color_filters_keep: List[ColorFilterSetting] = field(default_factory=default_keep_filters)
     color_filters_remove: List[ColorFilterSetting] = field(default_factory=default_remove_filters)
@@ -79,6 +81,8 @@ class OverlaySettings:
         self.show_overlay = True
         self.opacity = 0.65
         self.line_thickness = 0.0
+        self.outline_thickness = 1.0
+        self.outline_color = "#FFFFFF"
         self.clear_alignment()
 
     def clear_alignment(self) -> None:
@@ -89,6 +93,8 @@ class OverlaySettings:
         self.color_filters_keep = default_keep_filters()
         self.color_filters_remove = default_remove_filters()
         self.line_thickness = 0.0
+        self.outline_thickness = 1.0
+        self.outline_color = "#FFFFFF"
 
 
 @dataclass(slots=True)
