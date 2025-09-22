@@ -1685,7 +1685,7 @@ class EditorView(QWidget):
     def _set_display_overlay(self, image: Optional[Image.Image]) -> None:
         self._current_overlay_image = image
         self._view.update_overlay_image(image)
-        self._preview_panel.set_overlay_image(image)
+        self._preview_panel.set_overlay_image(self._base_overlay_image)
 
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))

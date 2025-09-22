@@ -35,7 +35,7 @@ def default_remove_filters() -> List[ColorFilterSetting]:
     """Return the initial remove filter set matching the web prototype."""
 
     return [
-        ColorFilterSetting("#000000", 50),
+        ColorFilterSetting("#FFFFFF", 50),
         ColorFilterSetting("#FFFF00", 50),
     ]
 
