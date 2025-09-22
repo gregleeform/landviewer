@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import List, Optional, Sequence, Tuple
 
 import cv2
+import math
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal, QThread
@@ -660,7 +661,7 @@ class EditorGraphicsView(QGraphicsView):
         self._polygon_item.setVisible(True)
 
     def _apply_line_balance(self, image: np.ndarray) -> np.ndarray:
-        """Normalize line thickness after the perspective warp."""
+        """Thicken parcel strokes by blending with a dilated overlay."""
 
         strength = float(self._line_balance_strength)
         if strength <= 0.0:
@@ -669,60 +670,37 @@ class EditorGraphicsView(QGraphicsView):
         if image.ndim != 3 or image.shape[2] < 4:
             return image
 
-        alpha = image[..., 3]
-        if not np.any(alpha):
+        if not np.any(image[..., 3]):
             return image
 
-        mask = (alpha > 0).astype(np.uint8)
-        if mask.sum() < 16:
+        max_radius = 5.0
+        radius = max_radius * strength
+        if radius <= 0.0:
             return image
 
-        distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
-        local_max = cv2.dilate(distance, np.ones((3, 3), np.uint8))
-        skeleton = ((distance > 0.0) & (distance >= (local_max - 1e-3))).astype(np.uint8)
-        skeleton &= mask
-        if skeleton.sum() == 0:
-            skeleton = mask
-
-        min_radius = 1.0
-        max_radius = 6.0
-        radius = min_radius + (max_radius - min_radius) * strength
-        kernel_size = max(3, int(round(radius * 2.0 + 1.0)))
-        if kernel_size % 2 == 0:
-            kernel_size += 1
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-
-        normalized = cv2.dilate(skeleton, kernel)
-        normalized = np.clip(normalized, 0, 1).astype(np.uint8)
-        if normalized.sum() == 0:
-            normalized = skeleton
-
-        balanced = (
-            (1.0 - strength) * mask.astype(np.float32)
-            + strength * normalized.astype(np.float32)
+        kernel_radius = max(1, int(math.ceil(radius)))
+        kernel_size = kernel_radius * 2 + 1
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (kernel_size, kernel_size)
         )
-        balanced = np.clip(balanced, 0.0, 1.0)
 
-        result = image.copy()
-        new_alpha = (balanced * 255.0).astype(np.uint8)
+        dilated = cv2.dilate(
+            image,
+            kernel,
+            iterations=1,
+            borderType=cv2.BORDER_CONSTANT,
+            borderValue=0,
+        )
 
-        added = (mask == 0) & (new_alpha > 0)
+        blended = cv2.addWeighted(
+            image.astype(np.float32),
+            1.0 - strength,
+            dilated.astype(np.float32),
+            strength,
+            0.0,
+        )
 
-        if np.any(added):
-            original_rgb = image[..., :3]
-            dilated_rgb = np.empty_like(original_rgb)
-            for channel in range(3):
-                dilated_rgb[..., channel] = cv2.dilate(
-                    original_rgb[..., channel], kernel
-                )
-            result[..., :3] = np.where(added[..., None], dilated_rgb, result[..., :3])
-
-        zero_alpha = new_alpha == 0
-        if np.any(zero_alpha):
-            result[zero_alpha, :3] = 0
-
-        result[..., 3] = new_alpha
-        return result
+        return np.clip(blended, 0, 255).astype(np.uint8)
 
 
 class _OverlayPreviewCanvas(QWidget):

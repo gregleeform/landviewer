@@ -25,9 +25,9 @@ The `python_app/` directory contains an in-progress PySide6 port of the Landview
 The current prototype reproduces the upload workflow, offers an interactive cadastral crop
 workspace, and now includes both manual and guided automatic pinning tools along with the
 advanced colour filter dialog so you can isolate parcel lines before aligning the overlay on
-top of the field photo directly on the desktop. A new line-uniformity slider keeps parcel
-strokes equally bold after the perspective warp so distant roads no longer fade while the
-foreground thickens.
+top of the field photo directly on the desktop. A line-uniformity slider now blends the
+overlay with a gently thickened version so distant parcel strokes catch up without softening
+the crisp foreground lines.
 
 ### Run the desktop prototype
 
