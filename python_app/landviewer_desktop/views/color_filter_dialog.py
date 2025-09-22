@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import List, Sequence, Tuple
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QRegularExpression, QRegularExpressionValidator
+from PySide6.QtCore import Qt, Signal, QRegularExpression
+from PySide6.QtGui import QColor, QRegularExpressionValidator
 from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
