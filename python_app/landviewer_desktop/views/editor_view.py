@@ -607,9 +607,26 @@ class _OverlayPreviewCanvas(QWidget):
             self._image_size = image.size
         self.update()
 
-    def set_auto_points(self, points: Sequence[QPointF]) -> None:
+    def set_auto_points(
+        self,
+        points: Sequence[QPointF],
+        *,
+        preserve_drag_index: bool = False,
+    ) -> None:
+        if preserve_drag_index:
+            drag_index = self._drag_index
+        else:
+            drag_index = None
+
         self._auto_points = [QPointF(point) for point in points]
-        self._drag_index = None
+
+        if preserve_drag_index:
+            if drag_index is not None and drag_index >= len(self._auto_points):
+                drag_index = None
+            self._drag_index = drag_index
+        else:
+            self._drag_index = None
+
         self.update()
 
     def set_highlighted(self, highlighted: bool) -> None:
@@ -846,8 +863,13 @@ class OverlayPreviewPanel(QWidget):
     def set_overlay_image(self, image: Optional[Image.Image]) -> None:
         self._canvas.set_image(image)
 
-    def set_auto_points(self, points: Sequence[QPointF]) -> None:
-        self._canvas.set_auto_points(points)
+    def set_auto_points(
+        self,
+        points: Sequence[QPointF],
+        *,
+        preserve_drag: bool = False,
+    ) -> None:
+        self._canvas.set_auto_points(points, preserve_drag_index=preserve_drag)
 
     def set_highlighted(self, highlighted: bool) -> None:
         self._canvas.set_highlighted(highlighted)
@@ -1374,7 +1396,10 @@ class EditorView(QWidget):
             return
 
         self._auto_source_points[index] = QPointF(point)
-        self._preview_panel.set_auto_points(self._auto_source_points)
+        self._preview_panel.set_auto_points(
+            self._auto_source_points,
+            preserve_drag=True,
+        )
         self._update_auto_alignment_from_points()
         self._update_instruction_text(completed=True)
 
