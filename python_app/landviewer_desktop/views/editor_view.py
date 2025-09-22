@@ -690,9 +690,6 @@ class EditorGraphicsView(QGraphicsView):
 
     @staticmethod
     def _apply_line_thickness(image: np.ndarray, radius: float) -> np.ndarray:
-        if radius <= 0.0:
-            return image
-
         if image.ndim != 3 or image.shape[2] < 4:
             return image
 
@@ -701,19 +698,41 @@ class EditorGraphicsView(QGraphicsView):
             return image
 
         mask = alpha > 0
-        inverted = np.where(mask, 0, 255).astype(np.uint8)
-        distances = cv2.distanceTransform(inverted, cv2.DIST_L2, 5)
-        expanded = mask | (distances <= float(radius))
-        if not np.any(expanded & ~mask):
-            return image
+        result = image.copy()
+
+        if radius <= 0.0:
+            rgb = result[..., :3]
+            rgb[mask, 0] = 255
+            rgb[mask, 1] = 0
+            rgb[mask, 2] = 0
+            return result.astype(np.uint8, copy=False)
 
         kernel_radius = max(1, int(math.ceil(radius)))
         kernel_size = kernel_radius * 2 + 1
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
-        dilated = cv2.dilate(image, kernel, iterations=1)
 
-        expanded_mask = expanded[..., None]
-        result = np.where(expanded_mask, dilated, image)
+        alpha_mask = np.where(mask, 255, 0).astype(np.uint8)
+        dilated_alpha = cv2.dilate(alpha_mask, kernel, iterations=1)
+
+        inverted = np.where(mask, 0, 255).astype(np.uint8)
+        distances = cv2.distanceTransform(inverted, cv2.DIST_L2, 5)
+        expanded = np.logical_or(mask, distances <= float(radius))
+
+        updated_alpha = result[..., 3]
+        if np.any(expanded):
+            updated_alpha = updated_alpha.copy()
+            updated_alpha[expanded] = np.maximum(
+                updated_alpha[expanded], dilated_alpha[expanded]
+            )
+            result[..., 3] = updated_alpha
+
+        filled = result[..., 3] > 0
+        if np.any(filled):
+            rgb = result[..., :3]
+            rgb[filled, 0] = 255
+            rgb[filled, 1] = 0
+            rgb[filled, 2] = 0
+
         return result.astype(np.uint8, copy=False)
 
 
