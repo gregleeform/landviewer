@@ -25,6 +25,21 @@ class ColorFilterSetting:
     tolerance: int = 50
 
 
+def default_keep_filters() -> List[ColorFilterSetting]:
+    """Return the initial keep filter set matching the web prototype."""
+
+    return [ColorFilterSetting("#FF0000", 50)]
+
+
+def default_remove_filters() -> List[ColorFilterSetting]:
+    """Return the initial remove filter set matching the web prototype."""
+
+    return [
+        ColorFilterSetting("#000000", 50),
+        ColorFilterSetting("#FFFF00", 50),
+    ]
+
+
 @dataclass(slots=True)
 class ImageSelection:
     """Holds metadata about a selected image file."""
@@ -53,8 +68,8 @@ class OverlaySettings:
     show_overlay: bool = True
     opacity: float = 0.65
     manual_points: Optional[Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float], Tuple[float, float]]] = None
-    color_filters_keep: List[ColorFilterSetting] = field(default_factory=list)
-    color_filters_remove: List[ColorFilterSetting] = field(default_factory=list)
+    color_filters_keep: List[ColorFilterSetting] = field(default_factory=default_keep_filters)
+    color_filters_remove: List[ColorFilterSetting] = field(default_factory=default_remove_filters)
     filtered_overlay: Optional[Image.Image] = None
 
     def reset(self) -> None:
@@ -69,8 +84,8 @@ class OverlaySettings:
 
         self.manual_points = None
         self.filtered_overlay = None
-        self.color_filters_keep = []
-        self.color_filters_remove = []
+        self.color_filters_keep = default_keep_filters()
+        self.color_filters_remove = default_remove_filters()
 
 
 @dataclass(slots=True)

@@ -61,11 +61,13 @@ def apply_color_filters(
     base_mask = alpha > 0
 
     remove_mask = np.zeros(alpha.shape, dtype=bool)
+    diff_buffer = np.empty_like(rgb)
     for filter_setting in remove_filters:
         colour = _parse_hex_colour(filter_setting.color)
         tolerance_sq = _tolerance_to_radius_squared(filter_setting.tolerance)
-        diff = rgb - colour
-        distance_sq = np.sum(diff * diff, axis=-1)
+        np.subtract(rgb, colour, out=diff_buffer)
+        np.square(diff_buffer, out=diff_buffer)
+        distance_sq = diff_buffer.sum(axis=-1)
         mask = (distance_sq <= tolerance_sq) & base_mask
         remove_mask |= mask
 
@@ -78,8 +80,9 @@ def apply_color_filters(
         for filter_setting in keep_filters:
             colour = _parse_hex_colour(filter_setting.color)
             tolerance_sq = _tolerance_to_radius_squared(filter_setting.tolerance)
-            diff = rgb - colour
-            distance_sq = np.sum(diff * diff, axis=-1)
+            np.subtract(rgb, colour, out=diff_buffer)
+            np.square(diff_buffer, out=diff_buffer)
+            distance_sq = diff_buffer.sum(axis=-1)
             mask = (distance_sq <= tolerance_sq) & base_mask
             if not mask.any():
                 continue

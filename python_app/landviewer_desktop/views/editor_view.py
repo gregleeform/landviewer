@@ -1078,6 +1078,9 @@ class EditorView(QWidget):
         self._color_processing_token = 0
         self._latest_color_token = 0
         self._color_threads: dict[int, QThread] = {}
+        self._color_workers: dict[int, _ColorFilterWorker] = {}
+
+        self.destroyed.connect(self._shutdown_color_threads)
 
     # ------------------------------------------------------------------
     def refresh(self) -> None:
@@ -1258,6 +1261,7 @@ class EditorView(QWidget):
         self._latest_color_token = token
 
         worker = _ColorFilterWorker(token, overlay, keep_filters, remove_filters)
+        self._color_workers[token] = worker
         thread = QThread(self)
         worker.moveToThread(thread)
         thread.started.connect(worker.process)
@@ -1267,6 +1271,8 @@ class EditorView(QWidget):
         worker.failed.connect(thread.quit)
         worker.finished.connect(worker.deleteLater)
         worker.failed.connect(worker.deleteLater)
+        worker.finished.connect(lambda *_, token=token: self._color_workers.pop(token, None))
+        worker.failed.connect(lambda *_, token=token: self._color_workers.pop(token, None))
         thread.finished.connect(thread.deleteLater)
         thread.finished.connect(lambda token=token: self._color_threads.pop(token, None))
         self._color_threads[token] = thread
@@ -1684,3 +1690,13 @@ class EditorView(QWidget):
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))
         self._opacity_value_label.setText(f"{percentage}%")
+
+    def _shutdown_color_threads(self) -> None:
+        """Ensure background colour filter threads exit before destruction."""
+
+        for token, thread in list(self._color_threads.items()):
+            if thread.isRunning():
+                thread.quit()
+                thread.wait(5000)
+            self._color_threads.pop(token, None)
+        self._color_workers.clear()
