@@ -26,9 +26,10 @@ The current prototype reproduces the upload workflow, offers an interactive cada
 workspace, and now includes both manual and guided automatic pinning tools along with the
 advanced colour filter dialog so you can isolate parcel lines before aligning the overlay on
 top of the field photo directly on the desktop. A line thickness slider mirrors the React
-app’s simple dilation effect, a new edge smoothing control softens jagged parcel strokes,
-and a companion outline colour/width control adds a contrasting stroke (white by default)
-around the red parcels so they stay easy to read after warping.
+app’s simple dilation effect, a unified line smoothing control now softens both the red
+parcel strokes and their optional outline, and a companion outline colour/width control
+adds a contrasting stroke (white by default) around the red parcels so they stay easy to
+read after warping.
 
 ### Run the desktop prototype
 

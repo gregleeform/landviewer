@@ -832,28 +832,48 @@ class EditorGraphicsView(QGraphicsView):
             smooth_radius = max(1, int(math.ceil(smoothing)))
             kernel_size = smooth_radius * 2 + 1
 
-            alpha_plane = result[..., 3].astype(np.float32)
-            rgb_plane = result[..., :3].astype(np.float32)
+            alpha_plane = result[..., 3].astype(np.float32) / 255.0
+            rgb_plane = result[..., :3].astype(np.float32) / 255.0
+
+            premultiplied = rgb_plane * alpha_plane[..., None]
 
             blurred_alpha = cv2.GaussianBlur(alpha_plane, (kernel_size, kernel_size), 0)
-            blurred_rgb = cv2.GaussianBlur(rgb_plane, (kernel_size, kernel_size), 0)
+            blurred_pm = cv2.GaussianBlur(premultiplied, (kernel_size, kernel_size), 0)
 
-            if blurred_alpha is not None and blurred_rgb is not None:
-                updated_alpha = np.maximum(alpha_plane, blurred_alpha)
-                result[..., 3] = np.clip(updated_alpha, 0.0, 255.0).astype(np.uint8)
-                result[..., :3] = np.clip(blurred_rgb, 0.0, 255.0).astype(np.uint8)
+            if blurred_alpha is not None and blurred_pm is not None:
+                smoothed_alpha = np.clip(blurred_alpha, 0.0, 1.0)
+                smoothed_pm = np.clip(blurred_pm, 0.0, 1.0)
 
-                rgb = result[..., :3]
+                alpha_mask = smoothed_alpha > 1e-4
+                smoothed_rgb = np.zeros_like(rgb_plane)
+                if np.any(alpha_mask):
+                    smoothed_rgb[alpha_mask] = (
+                        smoothed_pm[alpha_mask]
+                        / smoothed_alpha[alpha_mask, None]
+                    )
+
+                smoothed_rgb = np.clip(smoothed_rgb, 0.0, 1.0)
+
+                result[..., 3] = (smoothed_alpha * 255.0).astype(np.uint8)
+                result_rgb = (smoothed_rgb * 255.0).astype(np.uint8)
+                result[..., :3] = result_rgb
+
+                rgb_uint8 = result[..., :3]
+
                 if line_mask is not None and np.any(line_mask):
-                    rgb[line_mask, 0] = 255
-                    rgb[line_mask, 1] = 0
-                    rgb[line_mask, 2] = 0
+                    core_mask = np.logical_and(line_mask, smoothed_alpha >= 0.9)
+                    if np.any(core_mask):
+                        rgb_uint8[core_mask, 0] = 255
+                        rgb_uint8[core_mask, 1] = 0
+                        rgb_uint8[core_mask, 2] = 0
 
                 if np.any(outline_mask):
-                    r, g, b = outline_color
-                    rgb[outline_mask, 0] = r
-                    rgb[outline_mask, 1] = g
-                    rgb[outline_mask, 2] = b
+                    outline_core = np.logical_and(outline_mask, smoothed_alpha >= 0.9)
+                    if np.any(outline_core):
+                        r, g, b = outline_color
+                        rgb_uint8[outline_core, 0] = r
+                        rgb_uint8[outline_core, 1] = g
+                        rgb_uint8[outline_core, 2] = b
 
         return result.astype(np.uint8, copy=False)
 
@@ -1324,7 +1344,7 @@ class EditorView(QWidget):
 
         smoothing_row = QHBoxLayout()
         smoothing_row.addSpacing(12)
-        smoothing_row.addWidget(QLabel("Edge smoothing"))
+        smoothing_row.addWidget(QLabel("Line smoothing"))
         smoothing_row.addWidget(self._edge_smoothing_slider, stretch=1)
         smoothing_row.addWidget(self._edge_smoothing_value_label)
         layout.addLayout(smoothing_row)
