@@ -118,6 +118,7 @@ class EditorGraphicsView(QGraphicsView):
         self._default_points: Optional[List[QPointF]] = None
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
+        self._overlay_suppressed: bool = False
         self._suppress_point_updates = False
         self._handles_visible = True
         self._auto_click_enabled = False
@@ -152,6 +153,7 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
+        self._overlay_suppressed = False
 
     def load_images(
         self,
@@ -256,12 +258,20 @@ class EditorGraphicsView(QGraphicsView):
         self._overlay_opacity = max(0.0, min(opacity, 1.0))
         self._update_overlay_pixmap()
 
+    def set_overlay_suppressed(self, suppressed: bool) -> None:
+        """Temporarily hide the overlay regardless of visibility settings."""
+
+        if self._overlay_suppressed != suppressed:
+            self._overlay_suppressed = suppressed
+            self._update_overlay_pixmap()
+
     def set_handles_visible(self, visible: bool) -> None:
         """Show or hide the draggable handles."""
 
         self._handles_visible = visible
         for handle in self._handles:
             handle.setVisible(visible)
+        self._update_polygon()
 
     def set_manual_points(
         self,
@@ -521,6 +531,10 @@ class EditorGraphicsView(QGraphicsView):
         if not self._overlay_item or self._overlay_array is None or self._src_points is None:
             return
 
+        if self._overlay_suppressed:
+            self._overlay_item.setVisible(False)
+            return
+
         if not self._overlay_visible or not self._has_valid_polygon():
             self._overlay_item.setVisible(False)
             return
@@ -565,6 +579,10 @@ class EditorGraphicsView(QGraphicsView):
 
     def _update_polygon(self) -> None:
         if not self._polygon_item:
+            return
+
+        if not self._handles_visible:
+            self._polygon_item.setVisible(False)
             return
 
         if len(self._manual_points) < 2:
@@ -1143,6 +1161,7 @@ class EditorView(QWidget):
         self._auto_source_points = []
         self._auto_dest_points = []
         self._view.set_handles_visible(False)
+        self._view.set_overlay_suppressed(True)
         self._view.set_auto_markers([])
         self._view.clear_auto_adjustment()
         self._preview_panel.set_auto_points([])
@@ -1166,6 +1185,7 @@ class EditorView(QWidget):
         self._view.set_auto_cursor(False)
         self._view.clear_auto_adjustment()
         self._view.set_handles_visible(True)
+        self._view.set_overlay_suppressed(False)
         if not silent:
             self._update_instruction_text()
 
@@ -1350,6 +1370,7 @@ class EditorView(QWidget):
 
         manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
         self._view.set_manual_points(manual_points, allow_outside=True)
+        self._view.set_overlay_suppressed(False)
         self._view.set_handles_visible(False)
         self._view.set_auto_markers([])
         self._view.clear_auto_adjustment()
@@ -1440,6 +1461,7 @@ class EditorView(QWidget):
 
         manual_points = [QPointF(float(x), float(y)) for x, y in flattened]
         self._view.set_manual_points(manual_points, allow_outside=True)
+        self._view.set_overlay_suppressed(False)
         self._view.set_handles_visible(False)
         self._view.set_auto_adjust_points(self._auto_dest_points)
 
