@@ -148,6 +148,7 @@ class EditorGraphicsView(QGraphicsView):
         self._default_points: Optional[List[QPointF]] = None
         self._overlay_visible: bool = True
         self._overlay_opacity: float = 0.65
+        self._line_balance_strength: float = 0.5
         self._overlay_suppressed: bool = False
         self._suppress_point_updates = False
         self._handles_visible = True
@@ -298,6 +299,15 @@ class EditorGraphicsView(QGraphicsView):
 
         self._overlay_visible = visible
         self._overlay_opacity = max(0.0, min(opacity, 1.0))
+        self._update_overlay_pixmap()
+
+    def set_line_balance_strength(self, strength: float) -> None:
+        """Adjust the uniform line thickness enhancement strength."""
+
+        clamped = max(0.0, min(strength, 1.0))
+        if abs(self._line_balance_strength - clamped) < 1e-3:
+            return
+        self._line_balance_strength = clamped
         self._update_overlay_pixmap()
 
     def set_overlay_suppressed(self, suppressed: bool) -> None:
@@ -612,6 +622,12 @@ class EditorGraphicsView(QGraphicsView):
             return
 
         result = warped
+        if self._line_balance_strength > 0.0:
+            try:
+                result = self._apply_line_balance(result)
+            except cv2.error:
+                result = warped
+
         if self._overlay_opacity < 1.0:
             alpha = result[..., 3].astype(np.float32)
             alpha *= self._overlay_opacity
@@ -642,6 +658,71 @@ class EditorGraphicsView(QGraphicsView):
         path.closeSubpath()
         self._polygon_item.setPath(path)
         self._polygon_item.setVisible(True)
+
+    def _apply_line_balance(self, image: np.ndarray) -> np.ndarray:
+        """Normalize line thickness after the perspective warp."""
+
+        strength = float(self._line_balance_strength)
+        if strength <= 0.0:
+            return image
+
+        if image.ndim != 3 or image.shape[2] < 4:
+            return image
+
+        alpha = image[..., 3]
+        if not np.any(alpha):
+            return image
+
+        mask = (alpha > 0).astype(np.uint8)
+        if mask.sum() < 16:
+            return image
+
+        distance = cv2.distanceTransform(mask, cv2.DIST_L2, 5)
+        local_max = cv2.dilate(distance, np.ones((3, 3), np.uint8))
+        skeleton = ((distance > 0.0) & (distance >= (local_max - 1e-3))).astype(np.uint8)
+        skeleton &= mask
+        if skeleton.sum() == 0:
+            skeleton = mask
+
+        min_radius = 1.0
+        max_radius = 6.0
+        radius = min_radius + (max_radius - min_radius) * strength
+        kernel_size = max(3, int(round(radius * 2.0 + 1.0)))
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size, kernel_size))
+
+        normalized = cv2.dilate(skeleton, kernel)
+        normalized = np.clip(normalized, 0, 1).astype(np.uint8)
+        if normalized.sum() == 0:
+            normalized = skeleton
+
+        balanced = (
+            (1.0 - strength) * mask.astype(np.float32)
+            + strength * normalized.astype(np.float32)
+        )
+        balanced = np.clip(balanced, 0.0, 1.0)
+
+        result = image.copy()
+        new_alpha = (balanced * 255.0).astype(np.uint8)
+
+        added = (mask == 0) & (new_alpha > 0)
+
+        if np.any(added):
+            original_rgb = image[..., :3]
+            dilated_rgb = np.empty_like(original_rgb)
+            for channel in range(3):
+                dilated_rgb[..., channel] = cv2.dilate(
+                    original_rgb[..., channel], kernel
+                )
+            result[..., :3] = np.where(added[..., None], dilated_rgb, result[..., :3])
+
+        zero_alpha = new_alpha == 0
+        if np.any(zero_alpha):
+            result[zero_alpha, :3] = 0
+
+        result[..., 3] = new_alpha
+        return result
 
 
 class _OverlayPreviewCanvas(QWidget):
@@ -1009,6 +1090,18 @@ class EditorView(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
+        self._line_balance_slider = QSlider(Qt.Orientation.Horizontal)
+        self._line_balance_slider.setRange(0, 100)
+        self._line_balance_slider.setPageStep(5)
+        self._line_balance_slider.setValue(50)
+        self._line_balance_slider.valueChanged.connect(self._handle_line_balance_changed)
+
+        self._line_balance_value_label = QLabel("50%")
+        self._line_balance_value_label.setObjectName("overlayLineBalanceValue")
+        self._line_balance_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
         self._reset_pins_button = QPushButton("Reset pins")
         self._reset_pins_button.clicked.connect(self._handle_reset_pins)
 
@@ -1052,6 +1145,13 @@ class EditorView(QWidget):
         overlay_row.addWidget(self._opacity_slider, stretch=1)
         overlay_row.addWidget(self._opacity_value_label)
         layout.addLayout(overlay_row)
+
+        balance_row = QHBoxLayout()
+        balance_row.addSpacing(12)
+        balance_row.addWidget(QLabel("Line uniformity"))
+        balance_row.addWidget(self._line_balance_slider, stretch=1)
+        balance_row.addWidget(self._line_balance_value_label)
+        layout.addLayout(balance_row)
 
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
@@ -1113,6 +1213,12 @@ class EditorView(QWidget):
             self._image_info_label.setText(
                 "Upload a cadastral map and field photo, then crop the overlay to begin alignment."
             )
+            line_strength = float(self._state.overlay.line_balance_strength)
+            self._line_balance_slider.blockSignals(True)
+            self._line_balance_slider.setValue(int(round(line_strength * 100)))
+            self._line_balance_slider.blockSignals(False)
+            self._update_line_balance_label(line_strength)
+            self._view.set_line_balance_strength(line_strength)
             self._manual_toggle.blockSignals(True)
             self._auto_toggle.blockSignals(True)
             self._manual_toggle.setChecked(True)
@@ -1154,6 +1260,13 @@ class EditorView(QWidget):
         self._opacity_slider.blockSignals(False)
         self._update_opacity_label(opacity)
 
+        line_strength = float(self._state.overlay.line_balance_strength)
+        self._line_balance_slider.blockSignals(True)
+        self._line_balance_slider.setValue(int(round(line_strength * 100)))
+        self._line_balance_slider.blockSignals(False)
+        self._update_line_balance_label(line_strength)
+
+        self._view.set_line_balance_strength(line_strength)
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
         self._set_controls_enabled(True)
 
@@ -1199,6 +1312,12 @@ class EditorView(QWidget):
         if resized:
             parts.append("Working with resized photo")
         return " — ".join(parts)
+
+    def _handle_line_balance_changed(self, value: int) -> None:
+        strength = max(0.0, min(value / 100.0, 1.0))
+        self._state.overlay.line_balance_strength = strength
+        self._view.set_line_balance_strength(strength)
+        self._update_line_balance_label(strength)
 
     def _handle_opacity_changed(self, value: int) -> None:
         opacity = max(0.0, min(value / 100.0, 1.0))
@@ -1668,6 +1787,7 @@ class EditorView(QWidget):
         self._controls_enabled = enabled
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
+        self._line_balance_slider.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
         self._restart_button.setEnabled(True)
         self._manual_toggle.setEnabled(enabled)
@@ -1690,6 +1810,13 @@ class EditorView(QWidget):
     def _update_opacity_label(self, opacity: float) -> None:
         percentage = int(round(opacity * 100))
         self._opacity_value_label.setText(f"{percentage}%")
+
+    def _update_line_balance_label(self, strength: float) -> None:
+        if strength <= 0.001:
+            self._line_balance_value_label.setText("Off")
+        else:
+            percentage = int(round(strength * 100))
+            self._line_balance_value_label.setText(f"{percentage}%")
 
     def _shutdown_color_threads(self) -> None:
         """Ensure background colour filter threads exit before destruction."""
