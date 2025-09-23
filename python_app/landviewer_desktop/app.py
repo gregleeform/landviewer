@@ -12,52 +12,52 @@ from landviewer_desktop.main_window import MainWindow
 def run() -> None:
     """Create the Qt event loop and show the main window."""
     app = QApplication(sys.argv)
-    _apply_dark_theme(app)
+    _apply_light_theme(app)
 
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
 
 
-def _apply_dark_theme(app: QApplication) -> None:
-    """Apply a dark palette and widget styling reminiscent of photo editors."""
+def _apply_light_theme(app: QApplication) -> None:
+    """Apply a light grey palette to give the editor a neutral photo-tool look."""
 
     palette = QPalette()
-    palette.setColor(QPalette.ColorRole.Window, QColor("#1a1d21"))
-    palette.setColor(QPalette.ColorRole.WindowText, QColor("#f0f0f0"))
-    palette.setColor(QPalette.ColorRole.Base, QColor("#1f2328"))
-    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#272b31"))
-    palette.setColor(QPalette.ColorRole.Text, QColor("#f0f0f0"))
-    palette.setColor(QPalette.ColorRole.Button, QColor("#2b2f35"))
-    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#f0f0f0"))
-    palette.setColor(QPalette.ColorRole.Link, QColor("#7aa2ff"))
-    palette.setColor(QPalette.ColorRole.Highlight, QColor("#4d75d4"))
-    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#0b0d0f"))
-    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#2f343a"))
-    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#f0f0f0"))
+    palette.setColor(QPalette.ColorRole.Window, QColor("#edf1f5"))
+    palette.setColor(QPalette.ColorRole.WindowText, QColor("#1f2933"))
+    palette.setColor(QPalette.ColorRole.Base, QColor("#f8fafc"))
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#e3e8ef"))
+    palette.setColor(QPalette.ColorRole.Text, QColor("#1f2933"))
+    palette.setColor(QPalette.ColorRole.Button, QColor("#dbe4f0"))
+    palette.setColor(QPalette.ColorRole.ButtonText, QColor("#1f2933"))
+    palette.setColor(QPalette.ColorRole.Link, QColor("#2563eb"))
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#93c5fd"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#1f2933"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#111827"))
     app.setPalette(palette)
 
     app.setStyleSheet(
         """
         QMainWindow, QWidget {
-            background-color: #1a1d21;
-            color: #f0f0f0;
+            background-color: #edf1f5;
+            color: #1f2933;
         }
 
         QToolBar {
-            background-color: #23262b;
-            border-bottom: 1px solid #2f3339;
+            background-color: #d9e0ea;
+            border-bottom: 1px solid #c7d0dd;
         }
 
         QLabel#appTitleLabel {
             font-size: 16px;
             font-weight: 600;
-            color: #f7f7f7;
+            color: #1f2933;
         }
 
         QFrame#imageSlot {
-            background-color: #202328;
-            border: 1px solid #30343a;
+            background-color: #f8fafc;
+            border: 1px solid #cbd5e1;
             border-radius: 8px;
             padding: 12px;
         }
@@ -69,50 +69,50 @@ def _apply_dark_theme(app: QApplication) -> None:
 
         QLabel#imageSlotFilename {
             font-size: 12px;
-            color: #a9afb9;
+            color: #475569;
         }
 
         QLabel#cropSelectionLabel {
             font-size: 12px;
-            color: #a9afb9;
+            color: #475569;
         }
 
         QLabel#editorInfoLabel {
             font-size: 12px;
-            color: #a9afb9;
+            color: #475569;
         }
 
         QLabel#overlayOpacityValue {
             font-size: 12px;
-            color: #a9afb9;
+            color: #475569;
             min-width: 48px;
         }
 
         QGraphicsView {
-            border: 1px solid #2f3339;
-            background-color: #111827;
+            border: 1px solid #cbd5e1;
+            background-color: #f3f4f6;
         }
 
         QPushButton {
-            background-color: #2b2f35;
-            color: #f0f0f0;
-            border: 1px solid #3a3f46;
+            background-color: #dbe4f0;
+            color: #1f2933;
+            border: 1px solid #bac4d1;
             border-radius: 4px;
             padding: 6px 14px;
         }
 
         QPushButton:hover:!disabled {
-            background-color: #34383f;
+            background-color: #cfd9e6;
         }
 
         QPushButton:pressed {
-            background-color: #2a2d33;
+            background-color: #c3cedd;
         }
 
         QPushButton:disabled {
-            color: #6d7177;
-            border-color: #2a2d33;
-            background-color: #25282d;
+            color: #94a3b8;
+            border-color: #d1d9e4;
+            background-color: #edf1f5;
         }
         """
     )

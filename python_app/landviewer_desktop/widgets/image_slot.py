@@ -35,7 +35,7 @@ class ImageSlotWidget(QFrame):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
         self._preview_label.setStyleSheet(
-            "QLabel { border: 1px dashed #555; padding: 12px; color: #bbb; }"
+            "QLabel { border: 1px dashed #94a3b8; padding: 12px; color: #64748b; }"
         )
 
         self._filename_label = QLabel("")

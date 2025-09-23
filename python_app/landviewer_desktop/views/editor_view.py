@@ -50,7 +50,7 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
         *,
         radius: float = 9.0,
         fill_color: str = "#38bdf8",
-        pen_color: str = "#0f172a",
+        pen_color: str = "#1f2933",
         pen_width: float = 1.5,
     ) -> None:
         QObject.__init__(self)
@@ -137,7 +137,7 @@ class EditorGraphicsView(QGraphicsView):
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
-        self.setBackgroundBrush(QColor("#0b1120"))
+        self.setBackgroundBrush(QColor("#f5f7fa"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
 
         self._photo_item: Optional[QGraphicsPixmapItem] = None
@@ -410,13 +410,13 @@ class EditorGraphicsView(QGraphicsView):
                     None,
                     radius=8.0,
                     fill_color="#f97316",
-                    pen_color="#0f172a",
+                    pen_color="#1f2933",
                     pen_width=1.4,
                 )
                 handle.setZValue(3.5)
                 handle.moved.connect(self._handle_auto_handle_moved)
                 label = QGraphicsSimpleTextItem(str(index + 1))
-                label.setBrush(QColor("#0f172a"))
+                label.setBrush(QColor("#1f2933"))
                 label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
                 label.setParentItem(handle)
                 label.setPos(-4.0, -6.0)
@@ -471,7 +471,7 @@ class EditorGraphicsView(QGraphicsView):
             radius = 7.0
             marker = QGraphicsEllipseItem(-radius, -radius, radius * 2, radius * 2)
             marker.setBrush(QColor("#f97316"))
-            marker.setPen(QPen(QColor("#0f172a"), 1.2))
+            marker.setPen(QPen(QColor("#1f2933"), 1.2))
             marker.setZValue(2.5)
             marker.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             marker.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
@@ -480,7 +480,7 @@ class EditorGraphicsView(QGraphicsView):
             self._auto_markers.append(marker)
 
             label = QGraphicsSimpleTextItem(str(index))
-            label.setBrush(QColor("#0f172a"))
+            label.setBrush(QColor("#1f2933"))
             label.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
             label.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
             label.setParentItem(marker)
@@ -828,82 +828,52 @@ class EditorGraphicsView(QGraphicsView):
                 rgb[outline_mask, 1] = g
                 rgb[outline_mask, 2] = b
 
-        line_alpha_plane = np.zeros(result.shape[:2], dtype=np.float32)
-        if line_mask is not None and np.any(line_mask):
-            line_alpha_plane[line_mask] = (
-                result[..., 3][line_mask].astype(np.float32) / 255.0
-            )
-
-        outline_alpha_plane = np.zeros_like(line_alpha_plane)
-        if np.any(outline_mask):
-            outline_alpha_plane[outline_mask] = (
-                result[..., 3][outline_mask].astype(np.float32) / 255.0
-            )
-
-        line_alpha_smoothed = line_alpha_plane.copy()
-        outline_alpha_smoothed = outline_alpha_plane.copy()
-
         if smoothing > 0.0:
+            base_result = result.copy()
             smooth_radius = max(1, int(math.ceil(smoothing)))
             kernel_size = smooth_radius * 2 + 1
 
-            line_alpha_smoothed = cv2.GaussianBlur(
-                line_alpha_smoothed, (kernel_size, kernel_size), 0
+            rgba = base_result.astype(np.float32) / 255.0
+            alpha_plane = rgba[..., 3]
+            premultiplied = rgba[..., :3] * alpha_plane[..., None]
+
+            blurred_premultiplied = cv2.GaussianBlur(
+                premultiplied, (kernel_size, kernel_size), 0
             )
-            outline_alpha_smoothed = cv2.GaussianBlur(
-                outline_alpha_smoothed, (kernel_size, kernel_size), 0
+            blurred_alpha = cv2.GaussianBlur(
+                alpha_plane, (kernel_size, kernel_size), 0
             )
 
-        line_alpha_smoothed = np.clip(line_alpha_smoothed, 0.0, 1.0)
-        outline_alpha_smoothed = np.clip(outline_alpha_smoothed, 0.0, 1.0)
+            blurred_alpha = np.clip(blurred_alpha, 0.0, 1.0)
+            colour = np.zeros_like(blurred_premultiplied)
+            mask = blurred_alpha > 1e-5
+            if np.any(mask):
+                colour[mask] = (
+                    blurred_premultiplied[mask]
+                    / blurred_alpha[mask, None]
+                )
+
+            rgba[..., :3] = np.clip(colour, 0.0, 1.0)
+            rgba[..., 3] = blurred_alpha
+            result = (rgba * 255.0 + 0.5).astype(np.uint8)
+
+            core_mask = base_result[..., 3] >= 250
+            if np.any(core_mask):
+                result[..., :3][core_mask] = base_result[..., :3][core_mask]
+                result[..., 3][core_mask] = base_result[..., 3][core_mask]
 
         if line_mask is not None and np.any(line_mask):
-            line_alpha_smoothed[line_mask] = 1.0
+            result[..., 0][line_mask] = 255
+            result[..., 1][line_mask] = 0
+            result[..., 2][line_mask] = 0
 
         if np.any(outline_mask):
-            outline_alpha_smoothed[outline_mask] = 1.0
+            r, g, b = outline_color
+            result[..., 0][outline_mask] = r
+            result[..., 1][outline_mask] = g
+            result[..., 2][outline_mask] = b
 
-        if np.any(outline_alpha_smoothed):
-            overlap = line_alpha_smoothed >= 0.5
-            outline_alpha_smoothed[overlap] = 0.0
-
-        total_alpha = np.clip(line_alpha_smoothed + outline_alpha_smoothed, 0.0, 1.0)
-
-        outline_rgb = np.array(outline_color, dtype=np.float32) / 255.0
-
-        premultiplied = np.zeros((*line_alpha_smoothed.shape, 3), dtype=np.float32)
-        premultiplied[..., 0] = line_alpha_smoothed
-
-        if np.any(outline_alpha_smoothed):
-            premultiplied += outline_alpha_smoothed[..., None] * outline_rgb
-
-        rgb = np.zeros_like(premultiplied)
-        alpha_mask = total_alpha > 1e-4
-        if np.any(alpha_mask):
-            rgb[alpha_mask] = (
-                premultiplied[alpha_mask]
-                / total_alpha[alpha_mask, None]
-            )
-
-        rgb = np.clip(rgb, 0.0, 1.0)
-
-        red_mask = line_alpha_smoothed > 1e-3
-        if np.any(red_mask):
-            rgb[red_mask, 0] = 1.0
-            rgb[red_mask, 1] = 0.0
-            rgb[red_mask, 2] = 0.0
-
-        if np.any(outline_alpha_smoothed):
-            outline_visible = np.logical_and(outline_alpha_smoothed > 1e-3, ~red_mask)
-            if np.any(outline_visible):
-                rgb[outline_visible, 0] = outline_rgb[0]
-                rgb[outline_visible, 1] = outline_rgb[1]
-                rgb[outline_visible, 2] = outline_rgb[2]
-
-        output = np.zeros_like(result)
-        output[..., :3] = (rgb * 255.0 + 0.5).astype(np.uint8)
-        output[..., 3] = (total_alpha * 255.0 + 0.5).astype(np.uint8)
-        return output.astype(np.uint8, copy=False)
+        return result.astype(np.uint8, copy=False)
 
 
 class _OverlayPreviewCanvas(QWidget):
@@ -977,16 +947,16 @@ class _OverlayPreviewCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         rect = self.rect()
-        painter.fillRect(rect, QColor("#0f172a"))
+        painter.fillRect(rect, QColor("#f3f4f6"))
 
-        border_color = "#38bdf8" if self._highlight_border else "#1f2937"
+        border_color = "#38bdf8" if self._highlight_border else "#cbd5e1"
         border_pen = QPen(QColor(border_color))
         border_pen.setWidth(1)
         painter.setPen(border_pen)
         painter.drawRect(rect.adjusted(0, 0, -1, -1))
 
         if not self._pixmap or not self._image_size:
-            painter.setPen(QColor("#94a3b8"))
+            painter.setPen(QColor("#64748b"))
             painter.drawText(
                 rect,
                 Qt.AlignmentFlag.AlignCenter,
@@ -1013,19 +983,19 @@ class _OverlayPreviewCanvas(QWidget):
             )
 
             handle_brush = QColor("#38bdf8")
-            handle_pen = QPen(QColor("#0f172a"), 1.5)
+            handle_pen = QPen(QColor("#1f2933"), 1.5)
 
             for label, point in zip(corner_labels, corners):
                 marker_rect = QRectF(point.x() - 9.0, point.y() - 9.0, 18.0, 18.0)
                 painter.setBrush(handle_brush)
                 painter.setPen(handle_pen)
                 painter.drawEllipse(marker_rect)
-                painter.setPen(QPen(QColor("#0f172a")))
+                painter.setPen(QPen(QColor("#1f2933")))
                 painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, label)
 
         if self._auto_points:
             marker_color = QColor("#f97316")
-            pen = QPen(QColor("#0f172a"), 1.2)
+            pen = QPen(QColor("#1f2933"), 1.2)
             for index, point in enumerate(self._auto_points, start=1):
                 px = dest_rect.left() + (point.x() / image_width) * dest_rect.width()
                 py = dest_rect.top() + (point.y() / image_height) * dest_rect.height()
@@ -1033,7 +1003,7 @@ class _OverlayPreviewCanvas(QWidget):
                 painter.setBrush(marker_color)
                 painter.setPen(pen)
                 painter.drawEllipse(marker_rect)
-                painter.setPen(QPen(QColor("#0f172a")))
+                painter.setPen(QPen(QColor("#1f2933")))
                 painter.drawText(marker_rect, Qt.AlignmentFlag.AlignCenter, str(index))
 
     def mousePressEvent(self, event):  # type: ignore[override]
@@ -2148,14 +2118,14 @@ class EditorView(QWidget):
     def _set_outline_color_button(self, color: str) -> None:
         normalized, rgb = EditorGraphicsView._normalise_color(color)
         brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
-        text_color = "#0f172a" if brightness > 160 else "#f8fafc"
+        text_color = "#1f2933" if brightness > 160 else "#f8fafc"
         disabled_color = (
-            "rgba(15, 23, 42, 0.6)" if text_color == "#0f172a" else "rgba(248, 250, 252, 0.6)"
+            "rgba(31, 41, 51, 0.6)" if text_color == "#1f2933" else "rgba(248, 250, 252, 0.6)"
         )
         style = (
             "QPushButton#overlayOutlineColor {"
             f" background-color: {normalized}; color: {text_color};"
-            " border: 1px solid #1f2937; padding: 4px 12px; border-radius: 4px;"
+            " border: 1px solid #94a3b8; padding: 4px 12px; border-radius: 4px;"
             " }\n"
             "QPushButton#overlayOutlineColor:disabled {"
             f" background-color: {normalized}; color: {disabled_color};"

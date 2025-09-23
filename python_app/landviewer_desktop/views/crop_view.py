@@ -37,7 +37,7 @@ class CropGraphicsView(QGraphicsView):
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
-        self.setBackgroundBrush(QColor("#111827"))
+        self.setBackgroundBrush(QColor("#f3f4f6"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
         self.setMouseTracking(True)
 

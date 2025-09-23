@@ -124,7 +124,7 @@ class _ColorFilterRow(QWidget):
 
     def _update_colour_button(self) -> None:
         self._colour_button.setStyleSheet(
-            f"background-color: {self._filter.color}; border: 1px solid #1f2937; border-radius: 6px;"
+            f"background-color: {self._filter.color}; border: 1px solid #94a3b8; border-radius: 6px;"
         )
 
     def _preview_from_text(self, text: str) -> None:
@@ -142,7 +142,7 @@ class _ColorFilterRow(QWidget):
 
     def _update_colour_button_from_preview(self, colour: str) -> None:
         self._colour_button.setStyleSheet(
-            f"background-color: {colour}; border: 1px solid #1f2937; border-radius: 6px;"
+            f"background-color: {colour}; border: 1px solid #94a3b8; border-radius: 6px;"
         )
 
     def _sync_from_text(self) -> None:
