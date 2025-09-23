@@ -86,12 +86,14 @@ class _ColorFilterRow(QWidget):
         self._tolerance_slider.setRange(0, 100)
         self._tolerance_slider.setValue(max(0, min(self._filter.tolerance, 100)))
         self._tolerance_slider.valueChanged.connect(self._update_tolerance_display)
-        tolerance_row.addWidget(self._tolerance_slider, stretch=1)
+        self._tolerance_slider.setFixedWidth(200)
+        tolerance_row.addWidget(self._tolerance_slider)
 
         self._tolerance_value = QLabel()
         self._tolerance_value.setMinimumWidth(24)
         self._tolerance_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         tolerance_row.addWidget(self._tolerance_value)
+        tolerance_row.addStretch(1)
         controls_column.addLayout(tolerance_row)
 
         layout.addLayout(controls_column, stretch=1)

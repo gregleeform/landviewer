@@ -828,54 +828,82 @@ class EditorGraphicsView(QGraphicsView):
                 rgb[outline_mask, 1] = g
                 rgb[outline_mask, 2] = b
 
+        line_alpha_plane = np.zeros(result.shape[:2], dtype=np.float32)
+        if line_mask is not None and np.any(line_mask):
+            line_alpha_plane[line_mask] = (
+                result[..., 3][line_mask].astype(np.float32) / 255.0
+            )
+
+        outline_alpha_plane = np.zeros_like(line_alpha_plane)
+        if np.any(outline_mask):
+            outline_alpha_plane[outline_mask] = (
+                result[..., 3][outline_mask].astype(np.float32) / 255.0
+            )
+
+        line_alpha_smoothed = line_alpha_plane.copy()
+        outline_alpha_smoothed = outline_alpha_plane.copy()
+
         if smoothing > 0.0:
             smooth_radius = max(1, int(math.ceil(smoothing)))
             kernel_size = smooth_radius * 2 + 1
 
-            alpha_plane = result[..., 3].astype(np.float32) / 255.0
-            rgb_plane = result[..., :3].astype(np.float32) / 255.0
+            line_alpha_smoothed = cv2.GaussianBlur(
+                line_alpha_smoothed, (kernel_size, kernel_size), 0
+            )
+            outline_alpha_smoothed = cv2.GaussianBlur(
+                outline_alpha_smoothed, (kernel_size, kernel_size), 0
+            )
 
-            premultiplied = rgb_plane * alpha_plane[..., None]
+        line_alpha_smoothed = np.clip(line_alpha_smoothed, 0.0, 1.0)
+        outline_alpha_smoothed = np.clip(outline_alpha_smoothed, 0.0, 1.0)
 
-            blurred_alpha = cv2.GaussianBlur(alpha_plane, (kernel_size, kernel_size), 0)
-            blurred_pm = cv2.GaussianBlur(premultiplied, (kernel_size, kernel_size), 0)
+        if line_mask is not None and np.any(line_mask):
+            line_alpha_smoothed[line_mask] = 1.0
 
-            if blurred_alpha is not None and blurred_pm is not None:
-                smoothed_alpha = np.clip(blurred_alpha, 0.0, 1.0)
-                smoothed_pm = np.clip(blurred_pm, 0.0, 1.0)
+        if np.any(outline_mask):
+            outline_alpha_smoothed[outline_mask] = 1.0
 
-                alpha_mask = smoothed_alpha > 1e-4
-                smoothed_rgb = np.zeros_like(rgb_plane)
-                if np.any(alpha_mask):
-                    smoothed_rgb[alpha_mask] = (
-                        smoothed_pm[alpha_mask]
-                        / smoothed_alpha[alpha_mask, None]
-                    )
+        if np.any(outline_alpha_smoothed):
+            overlap = line_alpha_smoothed >= 0.5
+            outline_alpha_smoothed[overlap] = 0.0
 
-                smoothed_rgb = np.clip(smoothed_rgb, 0.0, 1.0)
+        total_alpha = np.clip(line_alpha_smoothed + outline_alpha_smoothed, 0.0, 1.0)
 
-                result[..., 3] = (smoothed_alpha * 255.0).astype(np.uint8)
-                result_rgb = (smoothed_rgb * 255.0).astype(np.uint8)
-                result[..., :3] = result_rgb
+        outline_rgb = np.array(outline_color, dtype=np.float32) / 255.0
 
-                rgb_uint8 = result[..., :3]
+        premultiplied = np.zeros((*line_alpha_smoothed.shape, 3), dtype=np.float32)
+        premultiplied[..., 0] = line_alpha_smoothed
 
-                if line_mask is not None and np.any(line_mask):
-                    core_mask = np.logical_and(line_mask, smoothed_alpha >= 0.9)
-                    if np.any(core_mask):
-                        rgb_uint8[core_mask, 0] = 255
-                        rgb_uint8[core_mask, 1] = 0
-                        rgb_uint8[core_mask, 2] = 0
+        if np.any(outline_alpha_smoothed):
+            premultiplied += outline_alpha_smoothed[..., None] * outline_rgb
 
-                if np.any(outline_mask):
-                    outline_core = np.logical_and(outline_mask, smoothed_alpha >= 0.9)
-                    if np.any(outline_core):
-                        r, g, b = outline_color
-                        rgb_uint8[outline_core, 0] = r
-                        rgb_uint8[outline_core, 1] = g
-                        rgb_uint8[outline_core, 2] = b
+        rgb = np.zeros_like(premultiplied)
+        alpha_mask = total_alpha > 1e-4
+        if np.any(alpha_mask):
+            rgb[alpha_mask] = (
+                premultiplied[alpha_mask]
+                / total_alpha[alpha_mask, None]
+            )
 
-        return result.astype(np.uint8, copy=False)
+        rgb = np.clip(rgb, 0.0, 1.0)
+
+        red_mask = line_alpha_smoothed > 1e-3
+        if np.any(red_mask):
+            rgb[red_mask, 0] = 1.0
+            rgb[red_mask, 1] = 0.0
+            rgb[red_mask, 2] = 0.0
+
+        if np.any(outline_alpha_smoothed):
+            outline_visible = np.logical_and(outline_alpha_smoothed > 1e-3, ~red_mask)
+            if np.any(outline_visible):
+                rgb[outline_visible, 0] = outline_rgb[0]
+                rgb[outline_visible, 1] = outline_rgb[1]
+                rgb[outline_visible, 2] = outline_rgb[2]
+
+        output = np.zeros_like(result)
+        output[..., :3] = (rgb * 255.0 + 0.5).astype(np.uint8)
+        output[..., 3] = (total_alpha * 255.0 + 0.5).astype(np.uint8)
+        return output.astype(np.uint8, copy=False)
 
 
 class _OverlayPreviewCanvas(QWidget):
@@ -1231,11 +1259,14 @@ class EditorView(QWidget):
         self._overlay_checkbox = QCheckBox("Show cadastral overlay")
         self._overlay_checkbox.toggled.connect(self._handle_overlay_visibility)
 
+        self._control_slider_width = 260
+
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(0, 100)
         self._opacity_slider.setPageStep(5)
         self._opacity_slider.setValue(65)
         self._opacity_slider.valueChanged.connect(self._handle_opacity_changed)
+        self._configure_control_slider(self._opacity_slider)
 
         self._opacity_value_label = QLabel("65%")
         self._opacity_value_label.setObjectName("overlayOpacityValue")
@@ -1248,6 +1279,7 @@ class EditorView(QWidget):
         self._line_thickness_slider.setPageStep(1)
         self._line_thickness_slider.setValue(0)
         self._line_thickness_slider.valueChanged.connect(self._handle_line_thickness_changed)
+        self._configure_control_slider(self._line_thickness_slider)
 
         self._line_thickness_value_label = QLabel("0.0 px")
         self._line_thickness_value_label.setObjectName("overlayLineBalanceValue")
@@ -1264,6 +1296,7 @@ class EditorView(QWidget):
         self._edge_smoothing_slider.valueChanged.connect(
             self._handle_edge_smoothing_changed
         )
+        self._configure_control_slider(self._edge_smoothing_slider)
 
         self._edge_smoothing_value_label = QLabel("Off")
         self._edge_smoothing_value_label.setObjectName("overlaySmoothingValue")
@@ -1284,6 +1317,7 @@ class EditorView(QWidget):
         self._outline_thickness_slider.valueChanged.connect(
             self._handle_outline_thickness_changed
         )
+        self._configure_control_slider(self._outline_thickness_slider)
 
         self._outline_thickness_value_label = QLabel("1.0 px")
         self._outline_thickness_value_label.setObjectName("overlayOutlineValue")
@@ -1330,31 +1364,39 @@ class EditorView(QWidget):
         overlay_row = QHBoxLayout()
         overlay_row.addWidget(self._overlay_checkbox)
         overlay_row.addSpacing(12)
-        overlay_row.addWidget(QLabel("Opacity"))
-        overlay_row.addWidget(self._opacity_slider, stretch=1)
+        opacity_label = QLabel("Opacity")
+        overlay_row.addWidget(opacity_label)
+        overlay_row.addWidget(self._opacity_slider)
         overlay_row.addWidget(self._opacity_value_label)
+        overlay_row.addStretch(1)
         layout.addLayout(overlay_row)
 
         thickness_row = QHBoxLayout()
         thickness_row.addSpacing(12)
-        thickness_row.addWidget(QLabel("Line thickness"))
-        thickness_row.addWidget(self._line_thickness_slider, stretch=1)
+        thickness_label = QLabel("Line thickness")
+        thickness_row.addWidget(thickness_label)
+        thickness_row.addWidget(self._line_thickness_slider)
         thickness_row.addWidget(self._line_thickness_value_label)
+        thickness_row.addStretch(1)
         layout.addLayout(thickness_row)
 
         smoothing_row = QHBoxLayout()
         smoothing_row.addSpacing(12)
-        smoothing_row.addWidget(QLabel("Line smoothing"))
-        smoothing_row.addWidget(self._edge_smoothing_slider, stretch=1)
+        smoothing_label = QLabel("Line smoothing")
+        smoothing_row.addWidget(smoothing_label)
+        smoothing_row.addWidget(self._edge_smoothing_slider)
         smoothing_row.addWidget(self._edge_smoothing_value_label)
+        smoothing_row.addStretch(1)
         layout.addLayout(smoothing_row)
 
         outline_row = QHBoxLayout()
         outline_row.addSpacing(12)
-        outline_row.addWidget(QLabel("Outline"))
+        outline_label = QLabel("Outline")
+        outline_row.addWidget(outline_label)
         outline_row.addWidget(self._outline_color_button)
-        outline_row.addWidget(self._outline_thickness_slider, stretch=1)
+        outline_row.addWidget(self._outline_thickness_slider)
         outline_row.addWidget(self._outline_thickness_value_label)
+        outline_row.addStretch(1)
         layout.addLayout(outline_row)
 
         button_row = QHBoxLayout()
@@ -2098,6 +2140,10 @@ class EditorView(QWidget):
             self._outline_thickness_value_label.setText("Off")
         else:
             self._outline_thickness_value_label.setText(f"{thickness:.1f} px")
+
+    def _configure_control_slider(self, slider: QSlider) -> None:
+        slider.setFixedWidth(self._control_slider_width)
+        slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _set_outline_color_button(self, color: str) -> None:
         normalized, rgb = EditorGraphicsView._normalise_color(color)

@@ -231,6 +231,7 @@ class CropView(QWidget):
         self._rotation_slider.setTickInterval(15)
         self._rotation_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
         self._rotation_slider.setEnabled(False)
+        self._rotation_slider.setFixedWidth(260)
         self._rotation_value_label = QLabel("+0°")
         self._rotation_value_label.setObjectName("cropRotationValueLabel")
 
@@ -246,8 +247,9 @@ class CropView(QWidget):
         rotation_row = QHBoxLayout()
         rotation_caption = QLabel("Rotation")
         rotation_row.addWidget(rotation_caption)
-        rotation_row.addWidget(self._rotation_slider, stretch=1)
+        rotation_row.addWidget(self._rotation_slider)
         rotation_row.addWidget(self._rotation_value_label)
+        rotation_row.addStretch(1)
         layout.addLayout(rotation_row)
         layout.addSpacing(8)
         layout.addWidget(self._selection_label)
