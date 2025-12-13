@@ -814,7 +814,7 @@ class EditorGraphicsView(QGraphicsView):
             self,
             "Edit text",
             "Enter annotation text:",
-            textValue=item.toPlainText(),
+            text=item.toPlainText(),
         )
         if ok:
             item.set_text(text or "")
