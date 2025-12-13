@@ -3054,7 +3054,8 @@ class EditorView(QWidget):
         self._push_annotation_settings_to_view()
 
     def _push_annotation_settings_to_view(self) -> None:
-        self._view.set_annotation_settings(self._state.annotations)
+        settings = self._state.annotations
+        self._view.set_annotation_settings(settings)
 
         blur_value = max(0, min(int(round(settings.shadow_blur)), 60))
         self._shadow_checkbox.blockSignals(True)
