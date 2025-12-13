@@ -19,7 +19,7 @@ This plan outlines how to add text and shape drawing tools (Korean-friendly font
    - Support hit-testing and selection so text and shapes can be re-selected to edit properties (colours, stroke/outline thickness, shadow toggles).
    - Ensure text input respects IME composition for Korean; use `QGraphicsTextItem` with `setTextInteractionFlags` during editing and switch back to item-select mode when confirmed.
 
-3. **Styling and effects**
+3. **Styling and effects** *(complete)*
    - Implement outline rendering by drawing the stroke multiple times expanded by outline width; add drop shadow via blur kernel (QGraphicsDropShadowEffect for live preview, manual painter pass for export).
    - Allow separate stroke vs outline colours for lines/polylines; polygons can optionally fill with a semi-transparent colour while keeping the outline visible.
 

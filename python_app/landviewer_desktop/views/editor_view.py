@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
     QFontComboBox,
+    QGraphicsDropShadowEffect,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsSimpleTextItem,
@@ -169,6 +170,11 @@ class AnnotationPathItem(QGraphicsPathItem):
         self._handles: List[AnnotationVertexHandle] = []
         self._points: List[QPointF] = []
         self._origin = QPointF(0, 0)
+        self._shadow_effect = QGraphicsDropShadowEffect()
+        self._shadow_effect.setBlurRadius(max(0.0, self._shadow_blur))
+        self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
+        self._shadow_effect.setColor(QColor(0, 0, 0, 90))
+        self.setGraphicsEffect(self._shadow_effect if self._shadow_enabled and self._shadow_blur > 0 else None)
 
         self.setZValue(4)
         self.setAcceptHoverEvents(True)
@@ -252,6 +258,14 @@ class AnnotationPathItem(QGraphicsPathItem):
             self._shadow_enabled = shadow_enabled
         if shadow_blur is not None:
             self._shadow_blur = shadow_blur
+        if self._shadow_enabled and self._shadow_blur > 0:
+            if self.graphicsEffect() is None:
+                self.setGraphicsEffect(self._shadow_effect)
+            self._shadow_effect.setEnabled(True)
+            self._shadow_effect.setBlurRadius(max(0.0, self._shadow_blur))
+            self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
+        else:
+            self.setGraphicsEffect(None)
         self.update()
         self.changed.emit()
 
@@ -334,6 +348,10 @@ class AnnotationTextItem(QGraphicsTextItem):
         self._font_family = font_family
         self._font_size = font_size
         self._text_path = QPainterPath()
+        self._shadow_effect = QGraphicsDropShadowEffect()
+        self._shadow_effect.setBlurRadius(max(0.0, self._shadow_blur))
+        self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
+        self._shadow_effect.setColor(QColor(0, 0, 0, 90))
 
         self.setDefaultTextColor(QColor(fill_color))
         self.setPos(position)
@@ -347,6 +365,7 @@ class AnnotationTextItem(QGraphicsTextItem):
         )
         self._apply_font()
         self._rebuild_path()
+        self.setGraphicsEffect(self._shadow_effect if self._shadow_enabled and self._shadow_blur > 0 else None)
 
     def _apply_font(self) -> None:
         font = QFont(self._font_family, self._font_size)
@@ -395,6 +414,14 @@ class AnnotationTextItem(QGraphicsTextItem):
             self._font_size = font_size
         self._apply_font()
         self._rebuild_path()
+        if self._shadow_enabled and self._shadow_blur > 0:
+            if self.graphicsEffect() is None:
+                self.setGraphicsEffect(self._shadow_effect)
+            self._shadow_effect.setEnabled(True)
+            self._shadow_effect.setBlurRadius(max(0.0, self._shadow_blur))
+            self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
+        else:
+            self.setGraphicsEffect(None)
         self.update()
         self.changed.emit()
 
@@ -2258,7 +2285,9 @@ class EditorView(QWidget):
         self._color_processing_token += 1
         self._latest_color_token = self._color_processing_token
 
-        if photo is None or base_overlay is None:
+        has_images = photo is not None and base_overlay is not None
+
+        if not has_images:
             self._state.overlay.filtered_overlay = None
             self._current_overlay_image = None
             self._preview_panel.set_overlay_image(base_overlay)
@@ -2336,6 +2365,7 @@ class EditorView(QWidget):
         self._view.load_images(photo_pixmap, display_overlay, point_sequence)
         self._view.setEnabled(True)
         self._set_display_overlay(display_overlay)
+        self._set_controls_enabled(True)
 
         if self._state.overlay.manual_points is None:
             current_points = self._view.manual_points()
@@ -2380,8 +2410,6 @@ class EditorView(QWidget):
         self._view.set_annotation_settings(self._state.annotations)
         self._view.load_annotations(self._state.annotations.annotations)
         self._view.set_annotation_mode(self._state.annotations.active_tool)
-        self._set_controls_enabled(True)
-
         self._manual_toggle.blockSignals(True)
         self._auto_toggle.blockSignals(True)
         self._manual_toggle.setChecked(True)
