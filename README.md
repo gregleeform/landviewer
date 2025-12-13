@@ -48,4 +48,6 @@ application's first step while we iterate on the remaining features.
 The next milestone is a Photoshop-like annotation layer for adding Korean/English text,
 shape strokes, and configurable outlines/shadows on top of the aligned overlay. See
 [python_app/graphics_annotation_plan.md](python_app/graphics_annotation_plan.md) for the
-library choices and build-out steps.
+library choices and build-out steps. Phase 1 is now in the app: annotation toolbar
+presets (tool toggles, fill/stroke/outline colours, font/shadow options) are wired
+into the editor state so later phases can focus on interactive drawing and export.

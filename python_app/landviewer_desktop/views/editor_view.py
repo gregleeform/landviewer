@@ -9,12 +9,13 @@ import cv2
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal, QThread
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QColorDialog,
     QDialog,
+    QFontComboBox,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsSimpleTextItem,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSlider,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
     QSizePolicy,
@@ -1231,6 +1233,112 @@ class EditorView(QWidget):
 
         self._control_slider_width = 260
 
+        self._annotation_header = QLabel("Annotations")
+        self._annotation_header.setObjectName("annotationHeader")
+
+        self._annotation_tool_group = QButtonGroup(self)
+        self._annotation_tool_group.setExclusive(True)
+
+        self._select_tool = QPushButton("Select / Move")
+        self._select_tool.setCheckable(True)
+        self._select_tool.setChecked(True)
+        self._select_tool.toggled.connect(
+            lambda checked: self._handle_annotation_tool_selected("select", checked)
+        )
+        self._annotation_tool_group.addButton(self._select_tool)
+
+        self._text_tool = QPushButton("Text")
+        self._text_tool.setCheckable(True)
+        self._text_tool.toggled.connect(
+            lambda checked: self._handle_annotation_tool_selected("text", checked)
+        )
+        self._annotation_tool_group.addButton(self._text_tool)
+
+        self._line_tool = QPushButton("Line")
+        self._line_tool.setCheckable(True)
+        self._line_tool.toggled.connect(
+            lambda checked: self._handle_annotation_tool_selected("line", checked)
+        )
+        self._annotation_tool_group.addButton(self._line_tool)
+
+        self._polygon_tool = QPushButton("Polygon")
+        self._polygon_tool.setCheckable(True)
+        self._polygon_tool.toggled.connect(
+            lambda checked: self._handle_annotation_tool_selected("polygon", checked)
+        )
+        self._annotation_tool_group.addButton(self._polygon_tool)
+
+        self._fill_color_button = QPushButton("Fill")
+        self._fill_color_button.setObjectName("annotationFillColor")
+        self._fill_color_button.clicked.connect(
+            lambda: self._choose_annotation_color("fill")
+        )
+
+        self._stroke_color_button = QPushButton("Stroke")
+        self._stroke_color_button.setObjectName("annotationStrokeColor")
+        self._stroke_color_button.clicked.connect(
+            lambda: self._choose_annotation_color("stroke")
+        )
+
+        self._annotation_stroke_slider = QSlider(Qt.Orientation.Horizontal)
+        self._annotation_stroke_slider.setRange(0, 80)
+        self._annotation_stroke_slider.setPageStep(2)
+        self._annotation_stroke_slider.setValue(20)
+        self._annotation_stroke_slider.valueChanged.connect(
+            self._handle_annotation_stroke_changed
+        )
+        self._configure_control_slider(self._annotation_stroke_slider)
+
+        self._annotation_stroke_value_label = QLabel("2.0 px")
+        self._annotation_stroke_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._annotation_outline_color_button = QPushButton("Outline")
+        self._annotation_outline_color_button.setObjectName("annotationOutlineColor")
+        self._annotation_outline_color_button.clicked.connect(
+            lambda: self._choose_annotation_color("outline")
+        )
+
+        self._annotation_outline_slider = QSlider(Qt.Orientation.Horizontal)
+        self._annotation_outline_slider.setRange(0, 60)
+        self._annotation_outline_slider.setPageStep(2)
+        self._annotation_outline_slider.setValue(10)
+        self._annotation_outline_slider.valueChanged.connect(
+            self._handle_annotation_outline_changed
+        )
+        self._configure_control_slider(self._annotation_outline_slider)
+
+        self._annotation_outline_value_label = QLabel("1.0 px")
+        self._annotation_outline_value_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._shadow_checkbox = QCheckBox("Drop shadow")
+        self._shadow_checkbox.setChecked(True)
+        self._shadow_checkbox.toggled.connect(self._handle_shadow_toggled)
+
+        self._shadow_blur_slider = QSlider(Qt.Orientation.Horizontal)
+        self._shadow_blur_slider.setRange(0, 60)
+        self._shadow_blur_slider.setPageStep(2)
+        self._shadow_blur_slider.setValue(8)
+        self._shadow_blur_slider.valueChanged.connect(self._handle_shadow_blur_changed)
+        self._configure_control_slider(self._shadow_blur_slider)
+
+        self._shadow_blur_label = QLabel("8 px")
+        self._shadow_blur_label.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
+
+        self._font_picker = QFontComboBox()
+        self._font_picker.setEditable(False)
+        self._font_picker.currentFontChanged.connect(self._handle_font_changed)
+
+        self._font_size_spin = QSpinBox()
+        self._font_size_spin.setRange(8, 96)
+        self._font_size_spin.setValue(28)
+        self._font_size_spin.valueChanged.connect(self._handle_font_size_changed)
+
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(0, 100)
         self._opacity_slider.setPageStep(5)
@@ -1369,6 +1477,58 @@ class EditorView(QWidget):
         outline_row.addStretch(1)
         layout.addLayout(outline_row)
 
+        layout.addSpacing(8)
+        layout.addWidget(self._annotation_header)
+
+        tool_row = QHBoxLayout()
+        tool_row.addSpacing(12)
+        tool_label = QLabel("Tool")
+        tool_row.addWidget(tool_label)
+        tool_row.addWidget(self._select_tool)
+        tool_row.addWidget(self._text_tool)
+        tool_row.addWidget(self._line_tool)
+        tool_row.addWidget(self._polygon_tool)
+        tool_row.addStretch(1)
+        layout.addLayout(tool_row)
+
+        fill_row = QHBoxLayout()
+        fill_row.addSpacing(12)
+        fill_label = QLabel("Fill / Stroke")
+        fill_row.addWidget(fill_label)
+        fill_row.addWidget(self._fill_color_button)
+        fill_row.addWidget(self._stroke_color_button)
+        fill_row.addWidget(self._annotation_stroke_slider)
+        fill_row.addWidget(self._annotation_stroke_value_label)
+        fill_row.addStretch(1)
+        layout.addLayout(fill_row)
+
+        annotation_outline_row = QHBoxLayout()
+        annotation_outline_row.addSpacing(12)
+        annotation_outline_label = QLabel("Outline")
+        annotation_outline_row.addWidget(annotation_outline_label)
+        annotation_outline_row.addWidget(self._annotation_outline_color_button)
+        annotation_outline_row.addWidget(self._annotation_outline_slider)
+        annotation_outline_row.addWidget(self._annotation_outline_value_label)
+        annotation_outline_row.addStretch(1)
+        layout.addLayout(annotation_outline_row)
+
+        shadow_row = QHBoxLayout()
+        shadow_row.addSpacing(12)
+        shadow_row.addWidget(self._shadow_checkbox)
+        shadow_row.addWidget(self._shadow_blur_slider)
+        shadow_row.addWidget(self._shadow_blur_label)
+        shadow_row.addStretch(1)
+        layout.addLayout(shadow_row)
+
+        font_row = QHBoxLayout()
+        font_row.addSpacing(12)
+        font_label = QLabel("Font")
+        font_row.addWidget(font_label)
+        font_row.addWidget(self._font_picker)
+        font_row.addWidget(self._font_size_spin)
+        font_row.addStretch(1)
+        layout.addLayout(font_row)
+
         button_row = QHBoxLayout()
         button_row.setSpacing(8)
         button_row.addWidget(self._color_filter_button)
@@ -1383,6 +1543,7 @@ class EditorView(QWidget):
         self._set_outline_color_button(self._state.overlay.outline_color)
         self._update_outline_thickness_label(self._state.overlay.outline_thickness)
         self._update_edge_smoothing_label(self._state.overlay.edge_smoothing)
+        self._sync_annotation_controls()
 
         self._set_controls_enabled(False)
         self._controls_enabled = False
@@ -1418,6 +1579,7 @@ class EditorView(QWidget):
         self._view.set_auto_markers([])
         self._view.set_auto_click_enabled(False)
         self._view.set_auto_cursor(False)
+        self._sync_annotation_controls()
         self._base_overlay_image = base_overlay
         self._color_processing_token += 1
         self._latest_color_token = self._color_processing_token
@@ -1591,6 +1753,68 @@ class EditorView(QWidget):
     def _handle_overlay_visibility(self, checked: bool) -> None:
         self._state.overlay.show_overlay = checked
         self._view.set_overlay_settings(checked, self._state.overlay.opacity)
+
+    def _handle_annotation_tool_selected(self, tool: str, checked: bool) -> None:
+        if not checked:
+            return
+        self._state.annotations.active_tool = tool
+
+    def _choose_annotation_color(self, role: str) -> None:
+        annotations = self._state.annotations
+        if role == "fill":
+            current = annotations.fill_color
+            button = self._fill_color_button
+            title = "Select fill colour"
+        elif role == "stroke":
+            current = annotations.stroke_color
+            button = self._stroke_color_button
+            title = "Select stroke colour"
+        else:
+            current = annotations.outline_color
+            button = self._annotation_outline_color_button
+            title = "Select outline colour"
+
+        initial = QColor(current)
+        if not initial.isValid():
+            initial = QColor("#FFFFFF")
+        color = QColorDialog.getColor(initial, self, title)
+        if not color.isValid():
+            return
+
+        normalized, _ = self._style_color_button(
+            button, color.name(), button.objectName()
+        )
+        if role == "fill":
+            annotations.fill_color = normalized
+        elif role == "stroke":
+            annotations.stroke_color = normalized
+        else:
+            annotations.outline_color = normalized
+
+    def _handle_annotation_stroke_changed(self, value: int) -> None:
+        width = max(0.0, min(value / 10.0, 8.0))
+        self._state.annotations.stroke_width = width
+        self._update_annotation_stroke_label(width)
+
+    def _handle_annotation_outline_changed(self, value: int) -> None:
+        width = max(0.0, min(value / 10.0, 6.0))
+        self._state.annotations.outline_width = width
+        self._update_annotation_outline_label(width)
+
+    def _handle_shadow_toggled(self, enabled: bool) -> None:
+        self._state.annotations.shadow_enabled = enabled
+        self._shadow_blur_slider.setEnabled(enabled)
+
+    def _handle_shadow_blur_changed(self, value: int) -> None:
+        blur = max(0.0, min(float(value), 60.0))
+        self._state.annotations.shadow_blur = blur
+        self._update_shadow_blur_label(blur)
+
+    def _handle_font_changed(self, font: QFont) -> None:
+        self._state.annotations.font_family = font.family()
+
+    def _handle_font_size_changed(self, size: int) -> None:
+        self._state.annotations.font_size = max(8, min(size, 96))
 
     def _choose_outline_color(self) -> None:
         initial = QColor(self._state.overlay.outline_color)
@@ -2071,6 +2295,19 @@ class EditorView(QWidget):
         self._outline_thickness_slider.setEnabled(enabled)
         self._outline_color_button.setEnabled(enabled)
         self._reset_pins_button.setEnabled(enabled)
+        self._select_tool.setEnabled(enabled)
+        self._text_tool.setEnabled(enabled)
+        self._line_tool.setEnabled(enabled)
+        self._polygon_tool.setEnabled(enabled)
+        self._fill_color_button.setEnabled(enabled)
+        self._stroke_color_button.setEnabled(enabled)
+        self._annotation_stroke_slider.setEnabled(enabled)
+        self._annotation_outline_color_button.setEnabled(enabled)
+        self._annotation_outline_slider.setEnabled(enabled)
+        self._shadow_checkbox.setEnabled(enabled)
+        self._shadow_blur_slider.setEnabled(enabled and self._shadow_checkbox.isChecked())
+        self._font_picker.setEnabled(enabled)
+        self._font_size_spin.setEnabled(enabled)
         self._restart_button.setEnabled(True)
         self._manual_toggle.setEnabled(enabled)
         self._auto_toggle.setEnabled(enabled)
@@ -2083,6 +2320,68 @@ class EditorView(QWidget):
             and not self._processing_colors
         )
         self._color_filter_button.setEnabled(ready)
+
+    def _sync_annotation_controls(self) -> None:
+        """Align annotation toolbar controls with state."""
+
+        settings = self._state.annotations
+
+        self._select_tool.blockSignals(True)
+        self._text_tool.blockSignals(True)
+        self._line_tool.blockSignals(True)
+        self._polygon_tool.blockSignals(True)
+
+        self._select_tool.setChecked(settings.active_tool == "select")
+        self._text_tool.setChecked(settings.active_tool == "text")
+        self._line_tool.setChecked(settings.active_tool == "line")
+        self._polygon_tool.setChecked(settings.active_tool == "polygon")
+
+        self._select_tool.blockSignals(False)
+        self._text_tool.blockSignals(False)
+        self._line_tool.blockSignals(False)
+        self._polygon_tool.blockSignals(False)
+
+        self._style_color_button(self._fill_color_button, settings.fill_color, "annotationFillColor")
+        self._style_color_button(
+            self._stroke_color_button, settings.stroke_color, "annotationStrokeColor"
+        )
+        self._style_color_button(
+            self._annotation_outline_color_button,
+            settings.outline_color,
+            "annotationOutlineColor",
+        )
+
+        stroke_value = int(round(max(0.0, min(settings.stroke_width, 8.0)) * 10))
+        self._annotation_stroke_slider.blockSignals(True)
+        self._annotation_stroke_slider.setValue(stroke_value)
+        self._annotation_stroke_slider.blockSignals(False)
+        self._update_annotation_stroke_label(stroke_value / 10.0)
+
+        outline_value = int(round(max(0.0, min(settings.outline_width, 6.0)) * 10))
+        self._annotation_outline_slider.blockSignals(True)
+        self._annotation_outline_slider.setValue(outline_value)
+        self._annotation_outline_slider.blockSignals(False)
+        self._update_annotation_outline_label(outline_value / 10.0)
+
+        blur_value = max(0, min(int(round(settings.shadow_blur)), 60))
+        self._shadow_checkbox.blockSignals(True)
+        self._shadow_checkbox.setChecked(settings.shadow_enabled)
+        self._shadow_checkbox.blockSignals(False)
+        self._shadow_blur_slider.blockSignals(True)
+        self._shadow_blur_slider.setEnabled(settings.shadow_enabled)
+        self._shadow_blur_slider.setValue(blur_value)
+        self._shadow_blur_slider.blockSignals(False)
+        self._update_shadow_blur_label(float(blur_value))
+
+        self._font_picker.blockSignals(True)
+        desired_font = QFont(settings.font_family)
+        self._font_picker.setCurrentFont(desired_font)
+        self._font_picker.blockSignals(False)
+
+        font_size = max(8, min(settings.font_size, 96))
+        self._font_size_spin.blockSignals(True)
+        self._font_size_spin.setValue(font_size)
+        self._font_size_spin.blockSignals(False)
 
     def _set_display_overlay(self, image: Optional[Image.Image]) -> None:
         self._current_overlay_image = image
@@ -2111,29 +2410,30 @@ class EditorView(QWidget):
         else:
             self._outline_thickness_value_label.setText(f"{thickness:.1f} px")
 
+    def _update_annotation_stroke_label(self, width: float) -> None:
+        if width <= 0.001:
+            self._annotation_stroke_value_label.setText("Off")
+        else:
+            self._annotation_stroke_value_label.setText(f"{width:.1f} px")
+
+    def _update_annotation_outline_label(self, width: float) -> None:
+        if width <= 0.001:
+            self._annotation_outline_value_label.setText("Off")
+        else:
+            self._annotation_outline_value_label.setText(f"{width:.1f} px")
+
+    def _update_shadow_blur_label(self, blur: float) -> None:
+        if blur <= 0.001:
+            self._shadow_blur_label.setText("Off")
+        else:
+            self._shadow_blur_label.setText(f"{blur:.0f} px")
+
     def _configure_control_slider(self, slider: QSlider) -> None:
         slider.setFixedWidth(self._control_slider_width)
         slider.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _set_outline_color_button(self, color: str) -> None:
-        normalized, rgb = EditorGraphicsView._normalise_color(color)
-        brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
-        text_color = "#1f2933" if brightness > 160 else "#f8fafc"
-        disabled_color = (
-            "rgba(31, 41, 51, 0.6)" if text_color == "#1f2933" else "rgba(248, 250, 252, 0.6)"
-        )
-        style = (
-            "QPushButton#overlayOutlineColor {"
-            f" background-color: {normalized}; color: {text_color};"
-            " border: 1px solid #94a3b8; padding: 4px 12px; border-radius: 4px;"
-            " }\n"
-            "QPushButton#overlayOutlineColor:disabled {"
-            f" background-color: {normalized}; color: {disabled_color};"
-            " }"
-        )
-        self._outline_color_button.setStyleSheet(style)
-        self._outline_color_button.setText(normalized)
-        self._outline_color_button.setToolTip(f"Outline colour: {normalized}")
+        self._style_color_button(self._outline_color_button, color, "overlayOutlineColor")
 
     def _shutdown_color_threads(self) -> None:
         """Ensure background colour filter threads exit before destruction."""
@@ -2143,4 +2443,29 @@ class EditorView(QWidget):
                 thread.quit()
                 thread.wait(5000)
             self._color_threads.pop(token, None)
+
+    def _style_color_button(
+        self, button: QPushButton, color: str, object_name: str
+    ) -> Tuple[str, Tuple[int, int, int]]:
+        """Apply consistent colouring to colour picker buttons."""
+
+        normalized, rgb = EditorGraphicsView._normalise_color(color)
+        brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+        text_color = "#1f2933" if brightness > 160 else "#f8fafc"
+        disabled_color = (
+            "rgba(31, 41, 51, 0.6)" if text_color == "#1f2933" else "rgba(248, 250, 252, 0.6)"
+        )
+        style = (
+            f"QPushButton#{object_name} {{"
+            f" background-color: {normalized}; color: {text_color};"
+            " border: 1px solid #94a3b8; padding: 4px 12px; border-radius: 4px;"
+            " }\n"
+            f"QPushButton#{object_name}:disabled {{"
+            f" background-color: {normalized}; color: {disabled_color};"
+            " }"
+        )
+        button.setStyleSheet(style)
+        button.setText(normalized)
+        button.setToolTip(normalized)
+        return normalized, rgb
         self._color_workers.clear()

@@ -101,6 +101,38 @@ class OverlaySettings:
 
 
 @dataclass(slots=True)
+class AnnotationSettings:
+    """Holds drawing tool presets and saved annotation items."""
+
+    active_tool: str = "select"
+    fill_color: str = "#ffffff"
+    stroke_color: str = "#ff0000"
+    stroke_width: float = 2.0
+    outline_color: str = "#000000"
+    outline_width: float = 1.0
+    shadow_enabled: bool = True
+    shadow_blur: float = 8.0
+    font_family: str = "Noto Sans KR"
+    font_size: int = 28
+    annotations: List[object] = field(default_factory=list)
+
+    def reset(self) -> None:
+        """Restore defaults and drop any staged annotations."""
+
+        self.active_tool = "select"
+        self.fill_color = "#ffffff"
+        self.stroke_color = "#ff0000"
+        self.stroke_width = 2.0
+        self.outline_color = "#000000"
+        self.outline_width = 1.0
+        self.shadow_enabled = True
+        self.shadow_blur = 8.0
+        self.font_family = "Noto Sans KR"
+        self.font_size = 28
+        self.annotations = []
+
+
+@dataclass(slots=True)
 class AppState:
     """Container object for the global application state."""
 
@@ -108,6 +140,7 @@ class AppState:
     cadastral: ImageSelection = field(default_factory=ImageSelection)
     photo: ImageSelection = field(default_factory=ImageSelection)
     overlay: OverlaySettings = field(default_factory=OverlaySettings)
+    annotations: AnnotationSettings = field(default_factory=AnnotationSettings)
 
     def reset(self) -> None:
         """Resets the application to its initial state."""
@@ -115,3 +148,4 @@ class AppState:
         self.cadastral.clear()
         self.photo.clear()
         self.overlay.reset()
+        self.annotations.reset()
