@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from PIL import Image
 
@@ -114,7 +114,7 @@ class AnnotationSettings:
     shadow_blur: float = 8.0
     font_family: str = "Noto Sans KR"
     font_size: int = 28
-    annotations: List[object] = field(default_factory=list)
+    annotations: List["AnnotationItem"] = field(default_factory=list)
 
     def reset(self) -> None:
         """Restore defaults and drop any staged annotations."""
@@ -130,6 +130,44 @@ class AnnotationSettings:
         self.font_family = "Noto Sans KR"
         self.font_size = 28
         self.annotations = []
+
+
+@dataclass(slots=True)
+class AnnotationText:
+    """Persisted text annotation details."""
+
+    kind: Literal["text"] = "text"
+    text: str = "새 텍스트"
+    position: Tuple[float, float] = (0.0, 0.0)
+    fill_color: str = "#ffffff"
+    stroke_color: str = "#ff0000"
+    stroke_width: float = 2.0
+    outline_color: str = "#000000"
+    outline_width: float = 1.0
+    shadow_enabled: bool = True
+    shadow_blur: float = 8.0
+    font_family: str = "Noto Sans KR"
+    font_size: int = 28
+
+
+@dataclass(slots=True)
+class AnnotationPath:
+    """Persisted polyline or polygon annotation."""
+
+    kind: Literal["path"] = "path"
+    points: List[Tuple[float, float]] = field(default_factory=list)
+    closed: bool = False
+    fill_color: str = "#ffffff"
+    stroke_color: str = "#ff0000"
+    stroke_width: float = 2.0
+    outline_color: str = "#000000"
+    outline_width: float = 1.0
+    shadow_enabled: bool = True
+    shadow_blur: float = 8.0
+
+
+# Alias used for collections and type hints.
+AnnotationItem = AnnotationText | AnnotationPath
 
 
 @dataclass(slots=True)

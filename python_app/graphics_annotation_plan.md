@@ -10,11 +10,11 @@ This plan outlines how to add text and shape drawing tools (Korean-friendly font
 - **Image export**: Keep using Pillow/NumPy for compositing; render annotations into an offscreen `QImage` (matching the overlay size) and convert to NumPy arrays for final blending to preserve outlines/shadows during save.
 
 ## Phase breakdown
-1. **Toolbar & state scaffolding**
+1. **Toolbar & state scaffolding** *(complete)*
    - Add annotation tool toggles (select/move, text, line, polygon) plus colour pickers for fill/stroke/outline, stroke width slider, outline width slider, shadow toggle/offset/blur slider, and font picker/size field. Default to the bundled Korean-friendly font.
    - Extend `OverlaySettings`/`EditorState` to store active tool, colours, stroke/outline widths, shadow params, and an annotations collection.
 
-2. **Canvas interactions**
+2. **Canvas interactions** *(complete)*
    - Introduce annotation layers in `EditorGraphicsView`: create reusable `AnnotationTextItem` and `AnnotationPathItem` classes with draggable anchors and resize/rotate handles for text; multi-point creation for polylines/polygons with ESC/Enter to cancel/finish.
    - Support hit-testing and selection so text and shapes can be re-selected to edit properties (colours, stroke/outline thickness, shadow toggles).
    - Ensure text input respects IME composition for Korean; use `QGraphicsTextItem` with `setTextInteractionFlags` during editing and switch back to item-select mode when confirmed.

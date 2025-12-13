@@ -23,7 +23,9 @@ from PySide6.QtWidgets import (
     QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
+    QGraphicsTextItem,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -35,7 +37,14 @@ from PySide6.QtWidgets import (
 )
 
 from landviewer_desktop.services import image_io, color_filters
-from landviewer_desktop.state import AppState, ColorFilterSetting
+from landviewer_desktop.state import (
+    AnnotationItem,
+    AnnotationSettings,
+    AnnotationPath,
+    AnnotationText,
+    AppState,
+    ColorFilterSetting,
+)
 from landviewer_desktop.views.color_filter_dialog import ColorFilterDialog
 
 
@@ -97,6 +106,354 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
         self._bounds = QRectF(bounds) if bounds is not None else None
 
 
+class AnnotationVertexHandle(QObject, QGraphicsEllipseItem):
+    """Draggable vertex handle for annotation paths."""
+
+    moved = Signal(int, QPointF)
+
+    def __init__(
+        self,
+        index: int,
+        parent: Optional[QGraphicsItem] = None,
+        *,
+        radius: float = 6.5,
+        fill_color: str = "#f97316",
+        pen_color: str = "#1f2933",
+    ) -> None:
+        QObject.__init__(self)
+        QGraphicsEllipseItem.__init__(self, parent)
+        self._index = index
+        self.setRect(-radius, -radius, radius * 2, radius * 2)
+        self.setBrush(QColor(fill_color))
+        pen = QPen(QColor(pen_color), 1.0)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges, True)
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations, True)
+        self.setZValue(5)
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.moved.emit(self._index, self.pos())
+        return QGraphicsEllipseItem.itemChange(self, change, value)
+
+
+class AnnotationPathItem(QGraphicsPathItem):
+    """Editable polyline/polygon annotation with draggable vertices."""
+
+    changed = Signal()
+
+    def __init__(
+        self,
+        points: List[QPointF],
+        *,
+        closed: bool,
+        fill_color: str,
+        stroke_color: str,
+        stroke_width: float,
+        outline_color: str,
+        outline_width: float,
+        shadow_enabled: bool,
+        shadow_blur: float,
+    ) -> None:
+        super().__init__()
+        self._closed = closed
+        self._fill_color = fill_color
+        self._stroke_color = stroke_color
+        self._stroke_width = stroke_width
+        self._outline_color = outline_color
+        self._outline_width = outline_width
+        self._shadow_enabled = shadow_enabled
+        self._shadow_blur = shadow_blur
+        self._handles: List[AnnotationVertexHandle] = []
+        self._points: List[QPointF] = []
+        self._origin = QPointF(0, 0)
+
+        self.setZValue(4)
+        self.setAcceptHoverEvents(True)
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self._apply_points(points)
+
+    def _apply_points(self, scene_points: List[QPointF]) -> None:
+        if not scene_points:
+            return
+        self._origin = scene_points[0]
+        self.setPos(self._origin)
+        self._points = [point - self._origin for point in scene_points]
+        self._rebuild_path()
+        self._rebuild_handles()
+        self.changed.emit()
+
+    def _rebuild_path(self) -> None:
+        path = QPainterPath()
+        if not self._points:
+            self.setPath(path)
+            return
+        path.moveTo(self._points[0])
+        for point in self._points[1:]:
+            path.lineTo(point)
+        if self._closed:
+            path.closeSubpath()
+        self.setPath(path)
+
+    def _rebuild_handles(self) -> None:
+        for handle in self._handles:
+            self.scene().removeItem(handle)  # type: ignore[union-attr]
+        self._handles = []
+        for index, point in enumerate(self._points):
+            handle = AnnotationVertexHandle(index, parent=self)
+            handle.setPos(point)
+            handle.moved.connect(self._handle_vertex_moved)
+            self._handles.append(handle)
+
+    def _handle_vertex_moved(self, index: int, pos: QPointF) -> None:
+        if index < 0 or index >= len(self._points):
+            return
+        self._points[index] = QPointF(pos)
+        self._rebuild_path()
+        self.changed.emit()
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionChange:
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+            self.changed.emit()
+        return QGraphicsPathItem.itemChange(self, change, value)
+
+    def set_style(
+        self,
+        *,
+        fill_color: Optional[str] = None,
+        stroke_color: Optional[str] = None,
+        stroke_width: Optional[float] = None,
+        outline_color: Optional[str] = None,
+        outline_width: Optional[float] = None,
+        shadow_enabled: Optional[bool] = None,
+        shadow_blur: Optional[float] = None,
+    ) -> None:
+        if fill_color is not None:
+            self._fill_color = fill_color
+        if stroke_color is not None:
+            self._stroke_color = stroke_color
+        if stroke_width is not None:
+            self._stroke_width = stroke_width
+        if outline_color is not None:
+            self._outline_color = outline_color
+        if outline_width is not None:
+            self._outline_width = outline_width
+        if shadow_enabled is not None:
+            self._shadow_enabled = shadow_enabled
+        if shadow_blur is not None:
+            self._shadow_blur = shadow_blur
+        self.update()
+        self.changed.emit()
+
+    def scene_points(self) -> List[QPointF]:
+        return [self.mapToScene(point) for point in self._points]
+
+    def paint(self, painter: QPainter, option, widget=None):  # type: ignore[override]
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        if self._shadow_enabled and self._shadow_blur > 0:
+            shadow_pen = QPen(QColor(0, 0, 0, 80), max(1.0, self._shadow_blur / 4))
+            shadow_pen.setCosmetic(True)
+            shadow_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            shadow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(shadow_pen)
+            painter.translate(self._shadow_blur * 0.1, self._shadow_blur * 0.1)
+            painter.drawPath(self.path())
+            painter.translate(-self._shadow_blur * 0.1, -self._shadow_blur * 0.1)
+
+        if self._outline_width > 0:
+            outline_pen = QPen(QColor(self._outline_color), self._stroke_width + (self._outline_width * 2))
+            outline_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            outline_pen.setCosmetic(True)
+            painter.setPen(outline_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
+
+        if self._stroke_width > 0:
+            stroke_pen = QPen(QColor(self._stroke_color), self._stroke_width)
+            stroke_pen.setCosmetic(True)
+            stroke_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            stroke_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(stroke_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
+
+        if self._closed and self._fill_color:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self._fill_color))
+            painter.drawPath(self.path())
+
+        painter.restore()
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
+        if change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
+            self.changed.emit()
+        return QGraphicsTextItem.itemChange(self, change, value)
+
+
+class AnnotationTextItem(QGraphicsTextItem):
+    """Text annotation that supports inline edits and styling."""
+
+    changed = Signal()
+
+    def __init__(
+        self,
+        text: str,
+        *,
+        position: QPointF,
+        fill_color: str,
+        stroke_color: str,
+        stroke_width: float,
+        outline_color: str,
+        outline_width: float,
+        shadow_enabled: bool,
+        shadow_blur: float,
+        font_family: str,
+        font_size: int,
+    ) -> None:
+        super().__init__(text)
+        self._stroke_color = stroke_color
+        self._stroke_width = stroke_width
+        self._outline_color = outline_color
+        self._outline_width = outline_width
+        self._shadow_enabled = shadow_enabled
+        self._shadow_blur = shadow_blur
+        self._fill_color = fill_color
+        self._font_family = font_family
+        self._font_size = font_size
+        self._text_path = QPainterPath()
+
+        self.setDefaultTextColor(QColor(fill_color))
+        self.setPos(position)
+        self.setZValue(4.5)
+        self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+        self.setFlags(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsMovable
+            | QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
+            | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
+        )
+        self._apply_font()
+        self._rebuild_path()
+
+    def _apply_font(self) -> None:
+        font = QFont(self._font_family, self._font_size)
+        self.setFont(font)
+
+    def _rebuild_path(self) -> None:
+        font = self.font()
+        path = QPainterPath()
+        path.addText(QPointF(0, 0), font, self.toPlainText())
+        bounds = path.boundingRect()
+        path.translate(-bounds.left(), -bounds.top())
+        self._text_path = path
+        self.setTransformOriginPoint(path.boundingRect().center())
+
+    def set_style(
+        self,
+        *,
+        fill_color: Optional[str] = None,
+        stroke_color: Optional[str] = None,
+        stroke_width: Optional[float] = None,
+        outline_color: Optional[str] = None,
+        outline_width: Optional[float] = None,
+        shadow_enabled: Optional[bool] = None,
+        shadow_blur: Optional[float] = None,
+        font_family: Optional[str] = None,
+        font_size: Optional[int] = None,
+    ) -> None:
+        if fill_color is not None:
+            self._fill_color = fill_color
+            self.setDefaultTextColor(QColor(fill_color))
+        if stroke_color is not None:
+            self._stroke_color = stroke_color
+        if stroke_width is not None:
+            self._stroke_width = stroke_width
+        if outline_color is not None:
+            self._outline_color = outline_color
+        if outline_width is not None:
+            self._outline_width = outline_width
+        if shadow_enabled is not None:
+            self._shadow_enabled = shadow_enabled
+        if shadow_blur is not None:
+            self._shadow_blur = shadow_blur
+        if font_family is not None:
+            self._font_family = font_family
+        if font_size is not None:
+            self._font_size = font_size
+        self._apply_font()
+        self._rebuild_path()
+        self.update()
+        self.changed.emit()
+
+    def set_text(self, text: str) -> None:
+        self.setPlainText(text)
+        self._rebuild_path()
+        self.changed.emit()
+
+    def scene_position(self) -> QPointF:
+        return self.scenePos()
+
+    def paint(self, painter: QPainter, option, widget=None):  # type: ignore[override]
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        path = self._text_path
+
+        if self._shadow_enabled and self._shadow_blur > 0:
+            shadow_pen = QPen(QColor(0, 0, 0, 90), max(1.0, self._shadow_blur / 4))
+            shadow_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.translate(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
+            painter.setPen(shadow_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+            painter.translate(-self._shadow_blur * 0.12, -self._shadow_blur * 0.12)
+
+        if self._outline_width > 0:
+            outline_pen = QPen(QColor(self._outline_color), self._stroke_width + (self._outline_width * 2))
+            outline_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            outline_pen.setCosmetic(True)
+            painter.setPen(outline_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+
+        if self._stroke_width > 0:
+            stroke_pen = QPen(QColor(self._stroke_color), self._stroke_width)
+            stroke_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            stroke_pen.setCosmetic(True)
+            painter.setPen(stroke_pen)
+            painter.setBrush(QColor(self._fill_color))
+            painter.drawPath(path)
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(self._fill_color))
+            painter.drawPath(path)
+
+        painter.restore()
+
+    def mouseDoubleClickEvent(self, event):  # type: ignore[override]
+        text, ok = QInputDialog.getText(
+            None,
+            "Edit text",
+            "Enter annotation text:",
+            textValue=self.toPlainText(),
+        )
+        if ok:
+            self.set_text(text or "")
+        super().mouseDoubleClickEvent(event)
+
 class _ColorFilterWorker(QObject):
     """Background worker that applies colour filters to the overlay image."""
 
@@ -131,6 +488,7 @@ class EditorGraphicsView(QGraphicsView):
     points_changed = Signal(list)
     photo_clicked = Signal(QPointF)
     auto_handles_changed = Signal(list)
+    annotations_changed = Signal(list)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -169,6 +527,11 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points: List[QPointF] = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
+        self._annotation_items: List[QGraphicsItem] = []
+        self._annotation_mode: str = "select"
+        self._annotation_settings: Optional[AnnotationSettings] = None
+        self._pending_path: List[QPointF] = []
+        self._pending_path_item: Optional[AnnotationPathItem] = None
         self._effect_cached_image: Optional[np.ndarray] = None
         self._effect_cache_key: Optional[
             Tuple[float, float, float, Tuple[int, int, int]]
@@ -197,6 +560,11 @@ class EditorGraphicsView(QGraphicsView):
         self._auto_points = []
         self._auto_handles_visible = False
         self._suppress_auto_updates = False
+        self._annotation_items = []
+        self._annotation_mode = "select"
+        self._annotation_settings = None
+        self._pending_path = []
+        self._pending_path_item = None
         self._overlay_suppressed = False
         self._edge_smoothing = 0.0
         self._outline_thickness = 1.0
@@ -267,6 +635,236 @@ class EditorGraphicsView(QGraphicsView):
 
         self._handles_constrained = constrain_handles
         self._update_handle_bounds()
+
+    # ------------------------------------------------------------------
+    def set_annotation_settings(self, settings: AnnotationSettings) -> None:
+        """Store toolbar presets and restyle existing annotations."""
+
+        self._annotation_settings = settings
+        for item in list(self._annotation_items):
+            if isinstance(item, AnnotationTextItem):
+                item.set_style(
+                    fill_color=settings.fill_color,
+                    stroke_color=settings.stroke_color,
+                    stroke_width=settings.stroke_width,
+                    outline_color=settings.outline_color,
+                    outline_width=settings.outline_width,
+                    shadow_enabled=settings.shadow_enabled,
+                    shadow_blur=settings.shadow_blur,
+                    font_family=settings.font_family,
+                    font_size=settings.font_size,
+                )
+            elif isinstance(item, AnnotationPathItem):
+                item.set_style(
+                    fill_color=settings.fill_color,
+                    stroke_color=settings.stroke_color,
+                    stroke_width=settings.stroke_width,
+                    outline_color=settings.outline_color,
+                    outline_width=settings.outline_width,
+                    shadow_enabled=settings.shadow_enabled,
+                    shadow_blur=settings.shadow_blur,
+                )
+
+    # ------------------------------------------------------------------
+    def set_annotation_mode(self, mode: str) -> None:
+        self._annotation_mode = mode
+        if mode != "line" and mode != "polygon":
+            self._cancel_path()
+
+    # ------------------------------------------------------------------
+    def load_annotations(self, annotations: Sequence[AnnotationItem]) -> None:
+        self._clear_annotations()
+        if not annotations:
+            return
+        for entry in annotations:
+            kind = getattr(entry, "kind", None)
+            if kind == "text":
+                self._add_text_annotation(
+                    QPointF(*entry.position),
+                    preset=False,
+                    existing=entry,
+                )
+            elif kind == "path" and getattr(entry, "points", None):
+                points = [QPointF(x, y) for x, y in entry.points]
+                self._finalize_path(points, closed=getattr(entry, "closed", False), preset=False, existing=entry)
+
+    # ------------------------------------------------------------------
+    def _clear_annotations(self) -> None:
+        for item in self._annotation_items:
+            self._scene.removeItem(item)
+        self._annotation_items = []
+        self._pending_path = []
+        if self._pending_path_item:
+            self._scene.removeItem(self._pending_path_item)
+        self._pending_path_item = None
+
+    # ------------------------------------------------------------------
+    def _emit_annotations(self) -> None:
+        serialised: List[AnnotationItem] = []
+        for item in self._annotation_items:
+            if isinstance(item, AnnotationTextItem):
+                serialised.append(
+                    AnnotationText(
+                        text=item.toPlainText(),
+                        position=(item.scene_position().x(), item.scene_position().y()),
+                        fill_color=item._fill_color,
+                        stroke_color=item._stroke_color,
+                        stroke_width=item._stroke_width,
+                        outline_color=item._outline_color,
+                        outline_width=item._outline_width,
+                        shadow_enabled=item._shadow_enabled,
+                        shadow_blur=item._shadow_blur,
+                        font_family=item._font_family,
+                        font_size=item._font_size,
+                    )
+                )
+            elif isinstance(item, AnnotationPathItem):
+                points = [(point.x(), point.y()) for point in item.scene_points()]
+                serialised.append(
+                    AnnotationPath(
+                        points=points,
+                        closed=item._closed,
+                        fill_color=item._fill_color,
+                        stroke_color=item._stroke_color,
+                        stroke_width=item._stroke_width,
+                        outline_color=item._outline_color,
+                        outline_width=item._outline_width,
+                        shadow_enabled=item._shadow_enabled,
+                        shadow_blur=item._shadow_blur,
+                    )
+                )
+        self.annotations_changed.emit(serialised)
+
+    # ------------------------------------------------------------------
+    def _current_annotation_settings(self) -> AnnotationSettings:
+        return self._annotation_settings or AnnotationSettings()
+
+    # ------------------------------------------------------------------
+    def _add_text_annotation(
+        self,
+        pos: QPointF,
+        *,
+        preset: bool = True,
+        existing: Optional[AnnotationText] = None,
+    ) -> None:
+        settings = self._current_annotation_settings()
+        base_text = existing.text if existing else "새 텍스트"
+        item = AnnotationTextItem(
+            base_text,
+            position=pos,
+            fill_color=settings.fill_color,
+            stroke_color=settings.stroke_color,
+            stroke_width=settings.stroke_width,
+            outline_color=settings.outline_color,
+            outline_width=settings.outline_width,
+            shadow_enabled=settings.shadow_enabled,
+            shadow_blur=settings.shadow_blur,
+            font_family=settings.font_family,
+            font_size=settings.font_size,
+        )
+        if existing:
+            item.set_style(
+                fill_color=existing.fill_color,
+                stroke_color=existing.stroke_color,
+                stroke_width=existing.stroke_width,
+                outline_color=existing.outline_color,
+                outline_width=existing.outline_width,
+                shadow_enabled=existing.shadow_enabled,
+                shadow_blur=existing.shadow_blur,
+                font_family=existing.font_family,
+                font_size=existing.font_size,
+            )
+        item.changed.connect(self._emit_annotations)
+        self._scene.addItem(item)
+        self._annotation_items.append(item)
+        if preset:
+            self._emit_annotations()
+
+    # ------------------------------------------------------------------
+    def _start_path(self, pos: QPointF) -> None:
+        self._pending_path = [pos]
+        if self._pending_path_item:
+            self._scene.removeItem(self._pending_path_item)
+        self._pending_path_item = AnnotationPathItem(
+            [pos],
+            closed=self._annotation_mode == "polygon",
+            fill_color=self._current_annotation_settings().fill_color,
+            stroke_color=self._current_annotation_settings().stroke_color,
+            stroke_width=self._current_annotation_settings().stroke_width,
+            outline_color=self._current_annotation_settings().outline_color,
+            outline_width=self._current_annotation_settings().outline_width,
+            shadow_enabled=self._current_annotation_settings().shadow_enabled,
+            shadow_blur=self._current_annotation_settings().shadow_blur,
+        )
+        self._pending_path_item.setOpacity(0.6)
+        self._scene.addItem(self._pending_path_item)
+
+    # ------------------------------------------------------------------
+    def _extend_path(self, pos: QPointF) -> None:
+        if not self._pending_path:
+            self._start_path(pos)
+            return
+        self._pending_path.append(pos)
+        self._update_pending_path_preview()
+
+    # ------------------------------------------------------------------
+    def _update_pending_path_preview(self, hover: Optional[QPointF] = None) -> None:
+        if not self._pending_path_item:
+            return
+        points = list(self._pending_path)
+        if hover is not None:
+            points.append(hover)
+        self._pending_path_item._apply_points(points)
+
+    # ------------------------------------------------------------------
+    def _finalize_path(
+        self,
+        points: Optional[List[QPointF]] = None,
+        *,
+        closed: Optional[bool] = None,
+        preset: bool = True,
+        existing: Optional[AnnotationPath] = None,
+    ) -> None:
+        path_points = points or list(self._pending_path)
+        required = 3 if (closed or self._annotation_mode == "polygon") else 2
+        if len(path_points) < required:
+            self._cancel_path()
+            return
+        settings = self._current_annotation_settings()
+        item = AnnotationPathItem(
+            path_points,
+            closed=self._annotation_mode == "polygon" if closed is None else closed,
+            fill_color=settings.fill_color,
+            stroke_color=settings.stroke_color,
+            stroke_width=settings.stroke_width,
+            outline_color=settings.outline_color,
+            outline_width=settings.outline_width,
+            shadow_enabled=settings.shadow_enabled,
+            shadow_blur=settings.shadow_blur,
+        )
+        if existing:
+            item.set_style(
+                fill_color=existing.fill_color,
+                stroke_color=existing.stroke_color,
+                stroke_width=existing.stroke_width,
+                outline_color=existing.outline_color,
+                outline_width=existing.outline_width,
+                shadow_enabled=existing.shadow_enabled,
+                shadow_blur=existing.shadow_blur,
+            )
+        item.changed.connect(self._emit_annotations)
+        self._scene.addItem(item)
+        self._annotation_items.append(item)
+        self._cancel_path()
+        if preset:
+            self._emit_annotations()
+
+    # ------------------------------------------------------------------
+    def _cancel_path(self) -> None:
+        self._pending_path = []
+        if self._pending_path_item:
+            self._scene.removeItem(self._pending_path_item)
+        self._pending_path_item = None
 
         self._manual_points = [QPointF(handle.pos()) for handle in self._handles]
         self._update_polygon()
@@ -490,6 +1088,9 @@ class EditorGraphicsView(QGraphicsView):
 
     # ------------------------------------------------------------------
     def mousePressEvent(self, event):  # type: ignore[override]
+        if self._handle_annotation_press(event):
+            return
+
         if (
             self._auto_click_enabled
             and event.button() == Qt.MouseButton.LeftButton
@@ -511,6 +1112,78 @@ class EditorGraphicsView(QGraphicsView):
     def resizeEvent(self, event):  # type: ignore[override]
         super().resizeEvent(event)
         self._refit_view()
+
+    # ------------------------------------------------------------------
+    def _annotation_scene_pos(self, event) -> Optional[QPointF]:
+        if self._photo_item is None:
+            return None
+        scene_pos = self.mapToScene(event.position().toPoint())
+        item_pos = self._photo_item.mapFromScene(scene_pos)
+        rect = self._photo_item.boundingRect()
+        if rect.contains(item_pos):
+            return self._photo_item.mapToScene(item_pos)
+        return None
+
+    # ------------------------------------------------------------------
+    def _handle_annotation_press(self, event) -> bool:
+        if event.button() != Qt.MouseButton.LeftButton:
+            return False
+        if self._annotation_mode not in {"text", "line", "polygon"}:
+            return False
+
+        pos = self._annotation_scene_pos(event)
+        if pos is None:
+            return False
+
+        if self._annotation_mode == "text":
+            self._add_text_annotation(pos)
+        elif self._annotation_mode in {"line", "polygon"}:
+            if not self._pending_path:
+                self._start_path(pos)
+            else:
+                self._extend_path(pos)
+        event.accept()
+        return True
+
+    # ------------------------------------------------------------------
+    def _handle_annotation_move(self, event) -> bool:
+        if self._annotation_mode not in {"line", "polygon"}:
+            return False
+        if not self._pending_path:
+            return False
+
+        pos = self._annotation_scene_pos(event)
+        if pos is None:
+            return False
+        self._update_pending_path_preview(pos)
+        event.accept()
+        return True
+
+    # ------------------------------------------------------------------
+    def mouseMoveEvent(self, event):  # type: ignore[override]
+        if self._handle_annotation_move(event):
+            return
+        super().mouseMoveEvent(event)
+
+    # ------------------------------------------------------------------
+    def mouseDoubleClickEvent(self, event):  # type: ignore[override]
+        if (
+            self._annotation_mode in {"line", "polygon"}
+            and self._pending_path
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
+            self._finalize_path()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    # ------------------------------------------------------------------
+    def keyPressEvent(self, event):  # type: ignore[override]
+        if event.key() == Qt.Key.Key_Escape and self._pending_path:
+            self._cancel_path()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     # ------------------------------------------------------------------
     def _compute_default_points(self) -> Optional[List[QPointF]]:
@@ -1206,6 +1879,7 @@ class EditorView(QWidget):
         self._view.points_changed.connect(self._handle_points_changed)
         self._view.photo_clicked.connect(self._handle_photo_clicked)
         self._view.auto_handles_changed.connect(self._handle_auto_dest_points_adjusted)
+        self._view.annotations_changed.connect(self._handle_annotations_changed)
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
@@ -1681,6 +2355,9 @@ class EditorView(QWidget):
         self._view.set_edge_smoothing(smoothing)
         self._view.set_outline_settings(self._state.overlay.outline_color, outline)
         self._view.set_overlay_settings(self._state.overlay.show_overlay, opacity)
+        self._view.set_annotation_settings(self._state.annotations)
+        self._view.load_annotations(self._state.annotations.annotations)
+        self._view.set_annotation_mode(self._state.annotations.active_tool)
         self._set_controls_enabled(True)
 
         self._manual_toggle.blockSignals(True)
@@ -1758,6 +2435,7 @@ class EditorView(QWidget):
         if not checked:
             return
         self._state.annotations.active_tool = tool
+        self._view.set_annotation_mode(tool)
 
     def _choose_annotation_color(self, role: str) -> None:
         annotations = self._state.annotations
@@ -1790,31 +2468,41 @@ class EditorView(QWidget):
             annotations.stroke_color = normalized
         else:
             annotations.outline_color = normalized
+        self._push_annotation_settings_to_view()
 
     def _handle_annotation_stroke_changed(self, value: int) -> None:
         width = max(0.0, min(value / 10.0, 8.0))
         self._state.annotations.stroke_width = width
         self._update_annotation_stroke_label(width)
+        self._push_annotation_settings_to_view()
 
     def _handle_annotation_outline_changed(self, value: int) -> None:
         width = max(0.0, min(value / 10.0, 6.0))
         self._state.annotations.outline_width = width
         self._update_annotation_outline_label(width)
+        self._push_annotation_settings_to_view()
 
     def _handle_shadow_toggled(self, enabled: bool) -> None:
         self._state.annotations.shadow_enabled = enabled
         self._shadow_blur_slider.setEnabled(enabled)
+        self._push_annotation_settings_to_view()
 
     def _handle_shadow_blur_changed(self, value: int) -> None:
         blur = max(0.0, min(float(value), 60.0))
         self._state.annotations.shadow_blur = blur
         self._update_shadow_blur_label(blur)
+        self._push_annotation_settings_to_view()
 
     def _handle_font_changed(self, font: QFont) -> None:
         self._state.annotations.font_family = font.family()
+        self._push_annotation_settings_to_view()
 
     def _handle_font_size_changed(self, size: int) -> None:
         self._state.annotations.font_size = max(8, min(size, 96))
+        self._push_annotation_settings_to_view()
+
+    def _handle_annotations_changed(self, annotations: list[AnnotationItem]) -> None:
+        self._state.annotations.annotations = annotations
 
     def _choose_outline_color(self) -> None:
         initial = QColor(self._state.overlay.outline_color)
@@ -2362,6 +3050,11 @@ class EditorView(QWidget):
         self._annotation_outline_slider.setValue(outline_value)
         self._annotation_outline_slider.blockSignals(False)
         self._update_annotation_outline_label(outline_value / 10.0)
+
+        self._push_annotation_settings_to_view()
+
+    def _push_annotation_settings_to_view(self) -> None:
+        self._view.set_annotation_settings(self._state.annotations)
 
         blur_value = max(0, min(int(round(settings.shadow_blur)), 60))
         self._shadow_checkbox.blockSignals(True)
