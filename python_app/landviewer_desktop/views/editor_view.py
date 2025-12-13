@@ -2310,7 +2310,29 @@ class EditorView(QWidget):
         else:
             point_sequence = None
 
-        display_overlay = filtered_overlay or base_overlay
+        display_overlay = filtered_overlay
+        if display_overlay is None and base_overlay is not None:
+            has_filters = bool(
+                self._state.overlay.color_filters_keep
+                or self._state.overlay.color_filters_remove
+            )
+            if has_filters:
+                try:
+                    display_overlay = color_filters.apply_color_filters(
+                        base_overlay,
+                        self._state.overlay.color_filters_keep,
+                        self._state.overlay.color_filters_remove,
+                    )
+                    self._state.overlay.filtered_overlay = display_overlay
+                except Exception:
+                    display_overlay = base_overlay
+            else:
+                display_overlay = base_overlay
+
+        filtered_overlay = self._state.overlay.filtered_overlay
+        if display_overlay is filtered_overlay:
+            filtered_overlay = display_overlay
+
         self._view.load_images(photo_pixmap, display_overlay, point_sequence)
         self._view.setEnabled(True)
         self._set_display_overlay(display_overlay)
