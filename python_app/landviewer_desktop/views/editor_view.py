@@ -363,6 +363,7 @@ class AnnotationTextItem(QGraphicsTextItem):
             | QGraphicsItem.GraphicsItemFlag.ItemIsFocusable
             | QGraphicsItem.GraphicsItemFlag.ItemSendsGeometryChanges
         )
+        self.setAcceptHoverEvents(True)
         self._apply_font()
         self._rebuild_path()
         self.setGraphicsEffect(self._shadow_effect if self._shadow_enabled and self._shadow_blur > 0 else None)
@@ -481,6 +482,15 @@ class AnnotationTextItem(QGraphicsTextItem):
             self.set_text(text or "")
         super().mouseDoubleClickEvent(event)
 
+    def hoverEnterEvent(self, event):  # type: ignore[override]
+        if self.flags() & QGraphicsItem.GraphicsItemFlag.ItemIsMovable:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)
+        super().hoverEnterEvent(event)
+
+    def hoverLeaveEvent(self, event):  # type: ignore[override]
+        self.unsetCursor()
+        super().hoverLeaveEvent(event)
+
 class _ColorFilterWorker(QObject):
     """Background worker that applies colour filters to the overlay image."""
 
@@ -516,6 +526,7 @@ class EditorGraphicsView(QGraphicsView):
     photo_clicked = Signal(QPointF)
     auto_handles_changed = Signal(list)
     annotations_changed = Signal(list)
+    selection_changed = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -526,6 +537,8 @@ class EditorGraphicsView(QGraphicsView):
         )
         self.setBackgroundBrush(QColor("#f5f7fa"))
         self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setMouseTracking(True)
+        self._scene.selectionChanged.connect(self._emit_selection_changed)
 
         self._photo_item: Optional[QGraphicsPixmapItem] = None
         self._overlay_item: Optional[QGraphicsPixmapItem] = None
@@ -563,6 +576,8 @@ class EditorGraphicsView(QGraphicsView):
         self._effect_cache_key: Optional[
             Tuple[float, float, float, Tuple[int, int, int]]
         ] = None
+        self._auto_cursor_locked = False
+        self._refresh_annotation_cursor()
 
     # ------------------------------------------------------------------
     def clear(self) -> None:
@@ -599,6 +614,8 @@ class EditorGraphicsView(QGraphicsView):
         self._outline_color_rgb = (255, 255, 255)
         self._effect_cached_image = None
         self._effect_cache_key = None
+        self._auto_cursor_locked = False
+        self._refresh_annotation_cursor()
 
     def load_images(
         self,
@@ -697,6 +714,18 @@ class EditorGraphicsView(QGraphicsView):
         self._annotation_mode = mode
         if mode != "line" and mode != "polygon":
             self._cancel_path()
+        self._refresh_annotation_cursor()
+
+    # ------------------------------------------------------------------
+    def _refresh_annotation_cursor(self) -> None:
+        if self._auto_cursor_locked:
+            return
+        if self._annotation_mode == "text":
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+        elif self._annotation_mode in {"line", "polygon"}:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
 
     # ------------------------------------------------------------------
     def load_annotations(self, annotations: Sequence[AnnotationItem]) -> None:
@@ -724,6 +753,9 @@ class EditorGraphicsView(QGraphicsView):
         if self._pending_path_item:
             self._scene.removeItem(self._pending_path_item)
         self._pending_path_item = None
+
+    def _emit_selection_changed(self) -> None:
+        self.selection_changed.emit()
 
     # ------------------------------------------------------------------
     def _emit_annotations(self) -> None:
@@ -761,6 +793,31 @@ class EditorGraphicsView(QGraphicsView):
                     )
                 )
         self.annotations_changed.emit(serialised)
+
+    # ------------------------------------------------------------------
+    def selected_text_item(self) -> Optional[AnnotationTextItem]:
+        for item in self._scene.selectedItems():
+            if isinstance(item, AnnotationTextItem):
+                return item
+        return None
+
+    # ------------------------------------------------------------------
+    def has_selected_text(self) -> bool:
+        return self.selected_text_item() is not None
+
+    # ------------------------------------------------------------------
+    def edit_selected_text(self) -> None:
+        item = self.selected_text_item()
+        if item is None:
+            return
+        text, ok = QInputDialog.getText(
+            self,
+            "Edit text",
+            "Enter annotation text:",
+            textValue=item.toPlainText(),
+        )
+        if ok:
+            item.set_text(text or "")
 
     # ------------------------------------------------------------------
     def _current_annotation_settings(self) -> AnnotationSettings:
@@ -805,6 +862,8 @@ class EditorGraphicsView(QGraphicsView):
         self._scene.addItem(item)
         self._annotation_items.append(item)
         if preset:
+            self._scene.clearSelection()
+            item.setSelected(True)
             self._emit_annotations()
 
     # ------------------------------------------------------------------
@@ -1079,10 +1138,11 @@ class EditorGraphicsView(QGraphicsView):
     def set_auto_cursor(self, enabled: bool) -> None:
         """Toggle a crosshair cursor when awaiting destination clicks."""
 
+        self._auto_cursor_locked = enabled
         if enabled:
             self.viewport().setCursor(Qt.CursorShape.CrossCursor)
         else:
-            self.viewport().unsetCursor()
+            self._refresh_annotation_cursor()
 
     def set_auto_markers(
         self, points: Sequence[Tuple[float, float]] | Sequence[QPointF]
@@ -1907,6 +1967,7 @@ class EditorView(QWidget):
         self._view.photo_clicked.connect(self._handle_photo_clicked)
         self._view.auto_handles_changed.connect(self._handle_auto_dest_points_adjusted)
         self._view.annotations_changed.connect(self._handle_annotations_changed)
+        self._view.selection_changed.connect(self._update_annotation_selection_state)
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
@@ -1968,6 +2029,10 @@ class EditorView(QWidget):
             lambda checked: self._handle_annotation_tool_selected("polygon", checked)
         )
         self._annotation_tool_group.addButton(self._polygon_tool)
+
+        self._edit_text_button = QPushButton("Edit selected text…")
+        self._edit_text_button.setEnabled(False)
+        self._edit_text_button.clicked.connect(self._handle_edit_text)
 
         self._fill_color_button = QPushButton("Fill")
         self._fill_color_button.setObjectName("annotationFillColor")
@@ -2191,6 +2256,12 @@ class EditorView(QWidget):
         tool_row.addWidget(self._polygon_tool)
         tool_row.addStretch(1)
         layout.addLayout(tool_row)
+
+        edit_row = QHBoxLayout()
+        edit_row.addSpacing(12)
+        edit_row.addWidget(self._edit_text_button)
+        edit_row.addStretch(1)
+        layout.addLayout(edit_row)
 
         fill_row = QHBoxLayout()
         fill_row.addSpacing(12)
@@ -2486,6 +2557,13 @@ class EditorView(QWidget):
             return
         self._state.annotations.active_tool = tool
         self._view.set_annotation_mode(tool)
+        self._update_annotation_selection_state()
+
+    def _handle_edit_text(self) -> None:
+        self._view.edit_selected_text()
+
+    def _update_annotation_selection_state(self) -> None:
+        self._edit_text_button.setEnabled(self._view.has_selected_text())
 
     def _choose_annotation_color(self, role: str) -> None:
         annotations = self._state.annotations
@@ -3037,6 +3115,7 @@ class EditorView(QWidget):
         self._text_tool.setEnabled(enabled)
         self._line_tool.setEnabled(enabled)
         self._polygon_tool.setEnabled(enabled)
+        self._edit_text_button.setEnabled(enabled and self._view.has_selected_text())
         self._fill_color_button.setEnabled(enabled)
         self._stroke_color_button.setEnabled(enabled)
         self._annotation_stroke_slider.setEnabled(enabled)
