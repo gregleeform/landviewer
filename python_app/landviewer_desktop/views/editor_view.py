@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
     QSizePolicy,
@@ -94,6 +95,9 @@ class OverlayHandle(QObject, QGraphicsEllipseItem):
         return QGraphicsEllipseItem.itemChange(self, change, value)
 
     def mousePressEvent(self, event):  # type: ignore[override]
+        scene = self.scene()
+        if scene is not None:
+            scene.clearSelection()
         self.setCursor(Qt.CursorShape.ClosedHandCursor)
         QGraphicsEllipseItem.mousePressEvent(self, event)
 
@@ -1993,6 +1997,8 @@ class EditorView(QWidget):
         self._overlay_checkbox = QCheckBox("Show cadastral overlay")
         self._overlay_checkbox.toggled.connect(self._handle_overlay_visibility)
 
+        self._tab_widget = QTabWidget()
+
         self._control_slider_width = 260
 
         self._annotation_header = QLabel("Annotations")
@@ -2203,7 +2209,6 @@ class EditorView(QWidget):
         mode_row.addWidget(self._manual_toggle)
         mode_row.addWidget(self._auto_toggle)
         mode_row.addStretch(1)
-        layout.addLayout(mode_row)
 
         overlay_row = QHBoxLayout()
         overlay_row.addWidget(self._overlay_checkbox)
@@ -2213,7 +2218,6 @@ class EditorView(QWidget):
         overlay_row.addWidget(self._opacity_slider)
         overlay_row.addWidget(self._opacity_value_label)
         overlay_row.addStretch(1)
-        layout.addLayout(overlay_row)
 
         thickness_row = QHBoxLayout()
         thickness_row.addSpacing(12)
@@ -2222,7 +2226,6 @@ class EditorView(QWidget):
         thickness_row.addWidget(self._line_thickness_slider)
         thickness_row.addWidget(self._line_thickness_value_label)
         thickness_row.addStretch(1)
-        layout.addLayout(thickness_row)
 
         smoothing_row = QHBoxLayout()
         smoothing_row.addSpacing(12)
@@ -2231,7 +2234,6 @@ class EditorView(QWidget):
         smoothing_row.addWidget(self._edge_smoothing_slider)
         smoothing_row.addWidget(self._edge_smoothing_value_label)
         smoothing_row.addStretch(1)
-        layout.addLayout(smoothing_row)
 
         outline_row = QHBoxLayout()
         outline_row.addSpacing(12)
@@ -2241,10 +2243,24 @@ class EditorView(QWidget):
         outline_row.addWidget(self._outline_thickness_slider)
         outline_row.addWidget(self._outline_thickness_value_label)
         outline_row.addStretch(1)
-        layout.addLayout(outline_row)
 
-        layout.addSpacing(8)
-        layout.addWidget(self._annotation_header)
+        alignment_buttons = QHBoxLayout()
+        alignment_buttons.setSpacing(8)
+        alignment_buttons.addWidget(self._color_filter_button)
+        alignment_buttons.addWidget(self._reset_pins_button)
+        alignment_buttons.addStretch(1)
+
+        alignment_tab = QWidget()
+        alignment_layout = QVBoxLayout(alignment_tab)
+        alignment_layout.setContentsMargins(12, 8, 12, 8)
+        alignment_layout.setSpacing(8)
+        alignment_layout.addLayout(mode_row)
+        alignment_layout.addLayout(overlay_row)
+        alignment_layout.addLayout(thickness_row)
+        alignment_layout.addLayout(smoothing_row)
+        alignment_layout.addLayout(outline_row)
+        alignment_layout.addLayout(alignment_buttons)
+        alignment_layout.addStretch(1)
 
         tool_row = QHBoxLayout()
         tool_row.addSpacing(12)
@@ -2255,13 +2271,11 @@ class EditorView(QWidget):
         tool_row.addWidget(self._line_tool)
         tool_row.addWidget(self._polygon_tool)
         tool_row.addStretch(1)
-        layout.addLayout(tool_row)
 
         edit_row = QHBoxLayout()
         edit_row.addSpacing(12)
         edit_row.addWidget(self._edit_text_button)
         edit_row.addStretch(1)
-        layout.addLayout(edit_row)
 
         fill_row = QHBoxLayout()
         fill_row.addSpacing(12)
@@ -2272,7 +2286,6 @@ class EditorView(QWidget):
         fill_row.addWidget(self._annotation_stroke_slider)
         fill_row.addWidget(self._annotation_stroke_value_label)
         fill_row.addStretch(1)
-        layout.addLayout(fill_row)
 
         annotation_outline_row = QHBoxLayout()
         annotation_outline_row.addSpacing(12)
@@ -2282,7 +2295,6 @@ class EditorView(QWidget):
         annotation_outline_row.addWidget(self._annotation_outline_slider)
         annotation_outline_row.addWidget(self._annotation_outline_value_label)
         annotation_outline_row.addStretch(1)
-        layout.addLayout(annotation_outline_row)
 
         shadow_row = QHBoxLayout()
         shadow_row.addSpacing(12)
@@ -2290,7 +2302,6 @@ class EditorView(QWidget):
         shadow_row.addWidget(self._shadow_blur_slider)
         shadow_row.addWidget(self._shadow_blur_label)
         shadow_row.addStretch(1)
-        layout.addLayout(shadow_row)
 
         font_row = QHBoxLayout()
         font_row.addSpacing(12)
@@ -2299,16 +2310,31 @@ class EditorView(QWidget):
         font_row.addWidget(self._font_picker)
         font_row.addWidget(self._font_size_spin)
         font_row.addStretch(1)
-        layout.addLayout(font_row)
 
-        button_row = QHBoxLayout()
-        button_row.setSpacing(8)
-        button_row.addWidget(self._color_filter_button)
-        button_row.addWidget(self._reset_pins_button)
-        button_row.addStretch(1)
-        button_row.addWidget(self._status_label)
-        button_row.addWidget(self._restart_button)
-        layout.addLayout(button_row)
+        annotation_tab = QWidget()
+        annotation_layout = QVBoxLayout(annotation_tab)
+        annotation_layout.setContentsMargins(12, 8, 12, 8)
+        annotation_layout.setSpacing(8)
+        annotation_layout.addWidget(self._annotation_header)
+        annotation_layout.addLayout(tool_row)
+        annotation_layout.addLayout(edit_row)
+        annotation_layout.addLayout(fill_row)
+        annotation_layout.addLayout(annotation_outline_row)
+        annotation_layout.addLayout(shadow_row)
+        annotation_layout.addLayout(font_row)
+        annotation_layout.addStretch(1)
+
+        self._tab_widget.addTab(alignment_tab, "Pinning")
+        self._tab_widget.addTab(annotation_tab, "Annotations")
+
+        layout.addWidget(self._tab_widget)
+
+        footer_row = QHBoxLayout()
+        footer_row.setSpacing(8)
+        footer_row.addStretch(1)
+        footer_row.addWidget(self._status_label)
+        footer_row.addWidget(self._restart_button)
+        layout.addLayout(footer_row)
 
         self.setLayout(layout)
 
@@ -3104,6 +3130,8 @@ class EditorView(QWidget):
 
     def _set_controls_enabled(self, enabled: bool) -> None:
         self._controls_enabled = enabled
+        self._tab_widget.setTabEnabled(0, enabled)
+        self._tab_widget.setTabEnabled(1, enabled)
         self._overlay_checkbox.setEnabled(enabled)
         self._opacity_slider.setEnabled(enabled)
         self._line_thickness_slider.setEnabled(enabled)
