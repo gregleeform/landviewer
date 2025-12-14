@@ -344,7 +344,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         painter.restore()
 
 
-class AnnotationTextItem(QObject, QGraphicsTextItem):
+class AnnotationTextItem(QGraphicsTextItem):
     """Text annotation that supports inline edits and styling."""
 
     changed = Signal()
@@ -364,7 +364,6 @@ class AnnotationTextItem(QObject, QGraphicsTextItem):
         font_family: str,
         font_size: int,
     ) -> None:
-        QObject.__init__(self)
         QGraphicsTextItem.__init__(self, text)
         self._stroke_color = stroke_color
         self._stroke_width = stroke_width
