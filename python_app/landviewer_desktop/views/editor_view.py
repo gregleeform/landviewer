@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 from PIL import Image
 from PySide6.QtCore import QObject, QPointF, QRectF, Qt, Signal, QThread
-from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QBrush, QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -2521,6 +2521,7 @@ class EditorView(QWidget):
         self._node_button.setVisible(False)
         self._node_button.setObjectName("annotationNodeButton")
         self._node_button.setFixedHeight(26)
+        self._node_button.setMinimumWidth(140)
         self._node_button.clicked.connect(self._handle_edit_nodes)
         self._tracked_annotation_item: Optional[QGraphicsItem] = None
         self._node_edit_item: Optional[AnnotationPathItem] = None
