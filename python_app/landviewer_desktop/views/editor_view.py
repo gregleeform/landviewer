@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QGraphicsTextItem,
     QHBoxLayout,
-    QInputDialog,
+    QLineEdit,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -158,7 +158,8 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         points: List[QPointF],
         *,
         closed: bool,
-        fill_color: str,
+        fill_color: Optional[str],
+        fill_alpha: float,
         stroke_color: str,
         stroke_width: float,
         outline_color: str,
@@ -170,6 +171,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         QGraphicsPathItem.__init__(self)
         self._closed = closed
         self._fill_color = fill_color
+        self._fill_alpha = max(0.0, min(fill_alpha, 1.0))
         self._stroke_color = stroke_color
         self._stroke_width = stroke_width
         self._outline_color = outline_color
@@ -246,6 +248,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         self,
         *,
         fill_color: Optional[str] = None,
+        fill_alpha: Optional[float] = None,
         stroke_color: Optional[str] = None,
         stroke_width: Optional[float] = None,
         outline_color: Optional[str] = None,
@@ -255,6 +258,8 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
     ) -> None:
         if fill_color is not None:
             self._fill_color = fill_color
+        if fill_alpha is not None:
+            self._fill_alpha = max(0.0, min(fill_alpha, 1.0))
         if stroke_color is not None:
             self._stroke_color = stroke_color
         if stroke_width is not None:
@@ -313,9 +318,11 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self.path())
 
-        if self._closed and self._fill_color:
+        if self._closed and self._fill_color and self._fill_alpha > 0:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(self._fill_color))
+            color = QColor(self._fill_color)
+            color.setAlphaF(max(0.0, min(self._fill_alpha, 1.0)))
+            painter.setBrush(color)
             painter.drawPath(self.path())
 
         if self.isSelected():
@@ -354,7 +361,8 @@ class AnnotationTextItem(QGraphicsTextItem):
         text: str,
         *,
         position: QPointF,
-        fill_color: str,
+        fill_color: Optional[str],
+        fill_alpha: float,
         stroke_color: str,
         stroke_width: float,
         outline_color: str,
@@ -372,6 +380,7 @@ class AnnotationTextItem(QGraphicsTextItem):
         self._shadow_enabled = shadow_enabled
         self._shadow_blur = shadow_blur
         self._fill_color = fill_color
+        self._fill_alpha = max(0.0, min(fill_alpha, 1.0))
         self._font_family = font_family
         self._font_size = font_size
         self._text_path = QPainterPath()
@@ -380,7 +389,12 @@ class AnnotationTextItem(QGraphicsTextItem):
         self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
         self._shadow_effect.setColor(QColor(0, 0, 0, 90))
 
-        self.setDefaultTextColor(QColor(fill_color))
+        color = QColor(fill_color or "#000000")
+        if fill_color is None:
+            color.setAlpha(0)
+        else:
+            color.setAlphaF(max(0.0, min(self._fill_alpha, 1.0)))
+        self.setDefaultTextColor(color)
         self.setPos(position)
         self.setZValue(4.5)
         self.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
@@ -412,6 +426,7 @@ class AnnotationTextItem(QGraphicsTextItem):
         self,
         *,
         fill_color: Optional[str] = None,
+        fill_alpha: Optional[float] = None,
         stroke_color: Optional[str] = None,
         stroke_width: Optional[float] = None,
         outline_color: Optional[str] = None,
@@ -423,7 +438,15 @@ class AnnotationTextItem(QGraphicsTextItem):
     ) -> None:
         if fill_color is not None:
             self._fill_color = fill_color
-            self.setDefaultTextColor(QColor(fill_color))
+        if fill_alpha is not None:
+            self._fill_alpha = max(0.0, min(fill_alpha, 1.0))
+        if fill_color is not None or fill_alpha is not None:
+            color = QColor(self._fill_color or "#000000")
+            if self._fill_color is None:
+                color.setAlpha(0)
+            else:
+                color.setAlphaF(max(0.0, min(self._fill_alpha, 1.0)))
+            self.setDefaultTextColor(color)
         if stroke_color is not None:
             self._stroke_color = stroke_color
         if stroke_width is not None:
@@ -489,11 +512,21 @@ class AnnotationTextItem(QGraphicsTextItem):
             stroke_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             stroke_pen.setCosmetic(True)
             painter.setPen(stroke_pen)
-            painter.setBrush(QColor(self._fill_color))
+            color = QColor(self._fill_color or "#000000")
+            if self._fill_color is None:
+                color.setAlpha(0)
+            else:
+                color.setAlphaF(max(0.0, min(self._fill_alpha, 1.0)))
+            painter.setBrush(color)
             painter.drawPath(path)
         else:
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor(self._fill_color))
+            color = QColor(self._fill_color or "#000000")
+            if self._fill_color is None:
+                color.setAlpha(0)
+            else:
+                color.setAlphaF(max(0.0, min(self._fill_alpha, 1.0)))
+            painter.setBrush(color)
             painter.drawPath(path)
 
         if self.isSelected():
@@ -522,14 +555,6 @@ class AnnotationTextItem(QGraphicsTextItem):
         painter.restore()
 
     def mouseDoubleClickEvent(self, event):  # type: ignore[override]
-        text, ok = QInputDialog.getText(
-            None,
-            "Edit text",
-            "Enter annotation text:",
-            text=self.toPlainText(),
-        )
-        if ok:
-            self.set_text(text or "")
         super().mouseDoubleClickEvent(event)
 
     def hoverEnterEvent(self, event):  # type: ignore[override]
@@ -572,58 +597,112 @@ class _ColorFilterWorker(QObject):
 class _AnnotationStyleDialog(QDialog):
     """Dialog that exposes annotation styling controls on demand."""
 
-    def __init__(self, parent: QWidget, settings: AnnotationSettings, *, allow_font: bool) -> None:
+    def __init__(
+        self,
+        parent: QWidget,
+        settings: AnnotationSettings,
+        *,
+        allow_font: bool,
+        allow_fill: bool = True,
+        allow_stroke: bool = True,
+        allow_outline: bool = True,
+        allow_text_value: bool = False,
+        text_value: str = "",
+        live_apply=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Annotation options")
         self._settings = settings
         self._allow_font = allow_font
+        self._allow_fill = allow_fill
+        self._allow_stroke = allow_stroke
+        self._allow_outline = allow_outline
+        self._allow_text_value = allow_text_value
+        self._live_apply = live_apply
 
         self._fill_button = QPushButton()
+        self._fill_button.setObjectName("annotationDialogFillColor")
+        self._fill_clear = QPushButton("No fill")
+        self._fill_clear.clicked.connect(self._clear_fill)
         self._stroke_button = QPushButton()
+        self._stroke_button.setObjectName("annotationDialogStrokeColor")
         self._outline_button = QPushButton()
-        for button, color, name in (
-            (self._fill_button, settings.fill_color, "fill"),
-            (self._stroke_button, settings.stroke_color, "stroke"),
-            (self._outline_button, settings.outline_color, "outline"),
+        self._outline_button.setObjectName("annotationDialogOutlineColor")
+
+        for button, name in (
+            (self._fill_button, "fill"),
+            (self._stroke_button, "stroke"),
+            (self._outline_button, "outline"),
         ):
-            button.setObjectName(f"annotationDialog{name.title()}Color")
-            button.setMinimumWidth(72)
-            button.setProperty("colorValue", color)
-            button.setStyleSheet(f"background-color: {color}; border: 1px solid #9ca3af;")
+            button.setMinimumWidth(76)
             button.clicked.connect(lambda _, b=button, n=name: self._choose_color(b, n))
 
         self._stroke_width_spin = QDoubleSpinBox()
         self._stroke_width_spin.setRange(0.0, 12.0)
         self._stroke_width_spin.setSingleStep(0.2)
         self._stroke_width_spin.setValue(settings.stroke_width)
+        self._stroke_width_spin.valueChanged.connect(self._emit_live_update)
 
         self._outline_width_spin = QDoubleSpinBox()
         self._outline_width_spin.setRange(0.0, 12.0)
         self._outline_width_spin.setSingleStep(0.2)
         self._outline_width_spin.setValue(settings.outline_width)
+        self._outline_width_spin.valueChanged.connect(self._emit_live_update)
+
+        self._fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self._fill_alpha_slider.setRange(0, 100)
+        self._fill_alpha_slider.setValue(int(round(settings.fill_alpha * 100)))
+        self._fill_alpha_slider.valueChanged.connect(self._emit_live_update)
+        self._fill_alpha_label = QLabel(f"{int(round(settings.fill_alpha * 100))}%")
 
         self._shadow_checkbox = QCheckBox("Drop shadow")
         self._shadow_checkbox.setChecked(settings.shadow_enabled)
+        self._shadow_checkbox.toggled.connect(self._emit_live_update)
         self._shadow_blur_spin = QDoubleSpinBox()
         self._shadow_blur_spin.setRange(0.0, 40.0)
         self._shadow_blur_spin.setSingleStep(0.5)
         self._shadow_blur_spin.setValue(settings.shadow_blur)
         self._shadow_blur_spin.setEnabled(settings.shadow_enabled)
+        self._shadow_blur_spin.valueChanged.connect(self._emit_live_update)
         self._shadow_checkbox.toggled.connect(self._shadow_blur_spin.setEnabled)
 
         self._font_combo = QFontComboBox()
         self._font_combo.setEditable(False)
         self._font_combo.setCurrentFont(QFont(settings.font_family))
+        self._font_combo.currentFontChanged.connect(self._emit_live_update)
         self._font_size_spin = QSpinBox()
         self._font_size_spin.setRange(8, 96)
         self._font_size_spin.setValue(settings.font_size)
+        self._font_size_spin.valueChanged.connect(self._emit_live_update)
+
+        self._text_edit = QLineEdit(text_value)
+        self._text_edit.textEdited.connect(self._emit_live_update)
 
         form = QFormLayout()
-        form.addRow("Fill colour", self._fill_button)
-        form.addRow("Stroke colour", self._stroke_button)
-        form.addRow("Stroke width", self._stroke_width_spin)
-        form.addRow("Outline colour", self._outline_button)
-        form.addRow("Outline width", self._outline_width_spin)
+
+        if allow_text_value:
+            form.addRow("Text", self._text_edit)
+
+        if allow_fill:
+            fill_row = QHBoxLayout()
+            fill_row.addWidget(self._fill_button)
+            fill_row.addWidget(self._fill_clear)
+            fill_row.addStretch(1)
+            form.addRow("Fill colour", fill_row)
+
+            alpha_row = QHBoxLayout()
+            alpha_row.addWidget(self._fill_alpha_slider)
+            alpha_row.addWidget(self._fill_alpha_label)
+            form.addRow("Fill opacity", alpha_row)
+
+        if allow_stroke:
+            form.addRow("Stroke colour", self._stroke_button)
+            form.addRow("Stroke width", self._stroke_width_spin)
+
+        if allow_outline:
+            form.addRow("Outline colour", self._outline_button)
+            form.addRow("Outline width", self._outline_width_spin)
+
         form.addRow(self._shadow_checkbox, self._shadow_blur_spin)
 
         if allow_font:
@@ -639,28 +718,63 @@ class _AnnotationStyleDialog(QDialog):
         layout.addWidget(buttons)
         self.setLayout(layout)
 
+        self._apply_color_style(self._fill_button, settings.fill_color)
+        self._apply_color_style(self._stroke_button, settings.stroke_color)
+        self._apply_color_style(self._outline_button, settings.outline_color)
+
+    def _apply_color_style(self, button: QPushButton, color: Optional[str]) -> None:
+        normalized, rgb = EditorGraphicsView._normalise_color(color)
+        text_label = "None" if color is None else normalized
+        brightness = (rgb[0] * 299 + rgb[1] * 587 + rgb[2] * 114) / 1000
+        text_color = "#111827" if brightness > 160 else "#f8fafc"
+        button.setProperty("colorValue", color)
+        button.setText(text_label)
+        button.setStyleSheet(
+            f"QPushButton {{ background-color: {normalized}; color: {text_color}; border: 1px solid #9ca3af; padding: 4px 12px; border-radius: 4px; }}"
+        )
+
     def _choose_color(self, button: QPushButton, name: str) -> None:
-        initial = QColor(button.property("colorValue") or "#ffffff")
+        initial_color = button.property("colorValue")
+        initial = QColor(initial_color or "#ffffff")
         color = QColorDialog.getColor(initial, self, f"Select {name} colour")
         if not color.isValid():
             return
-        normalized = color.name()
-        button.setProperty("colorValue", normalized)
-        button.setStyleSheet(f"background-color: {normalized}; border: 1px solid #9ca3af;")
+        self._apply_color_style(button, color.name())
+        self._emit_live_update()
+
+    def _clear_fill(self) -> None:
+        self._apply_color_style(self._fill_button, None)
+        self._fill_alpha_slider.blockSignals(True)
+        self._fill_alpha_slider.setValue(0)
+        self._fill_alpha_label.setText("0%")
+        self._fill_alpha_slider.blockSignals(False)
+        self._emit_live_update()
+
+    def _emit_live_update(self) -> None:
+        if self._allow_fill:
+            self._fill_alpha_label.setText(f"{self._fill_alpha_slider.value()}%")
+        if callable(self._live_apply):
+            self._live_apply(self.result_settings(), self.text_value())
+
+    def text_value(self) -> Optional[str]:
+        if not self._allow_text_value:
+            return None
+        return self._text_edit.text()
 
     def result_settings(self) -> AnnotationSettings:
         base = self._settings
         return replace(
             base,
-            fill_color=self._fill_button.property("colorValue"),
-            stroke_color=self._stroke_button.property("colorValue"),
-            stroke_width=float(self._stroke_width_spin.value()),
-            outline_color=self._outline_button.property("colorValue"),
-            outline_width=float(self._outline_width_spin.value()),
+            fill_color=self._fill_button.property("colorValue") if self._allow_fill else base.fill_color,
+            fill_alpha=(self._fill_alpha_slider.value() / 100.0) if self._allow_fill else base.fill_alpha,
+            stroke_color=self._stroke_button.property("colorValue") if self._allow_stroke else base.stroke_color,
+            stroke_width=float(self._stroke_width_spin.value()) if self._allow_stroke else base.stroke_width,
+            outline_color=self._outline_button.property("colorValue") if self._allow_outline else base.outline_color,
+            outline_width=float(self._outline_width_spin.value()) if self._allow_outline else base.outline_width,
             shadow_enabled=self._shadow_checkbox.isChecked(),
             shadow_blur=float(self._shadow_blur_spin.value()),
-            font_family=self._font_combo.currentFont().family(),
-            font_size=int(self._font_size_spin.value()),
+            font_family=self._font_combo.currentFont().family() if self._allow_font else base.font_family,
+            font_size=int(self._font_size_spin.value()) if self._allow_font else base.font_size,
         )
 
 
@@ -672,6 +786,7 @@ class EditorGraphicsView(QGraphicsView):
     auto_handles_changed = Signal(list)
     annotations_changed = Signal(list)
     selection_changed = Signal()
+    annotation_double_clicked = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -838,8 +953,9 @@ class EditorGraphicsView(QGraphicsView):
             if isinstance(item, AnnotationTextItem):
                 item.set_style(
                     fill_color=settings.fill_color,
+                    fill_alpha=settings.fill_alpha,
                     stroke_color=settings.stroke_color,
-                    stroke_width=settings.stroke_width,
+                    stroke_width=0.0,
                     outline_color=settings.outline_color,
                     outline_width=settings.outline_width,
                     shadow_enabled=settings.shadow_enabled,
@@ -850,6 +966,7 @@ class EditorGraphicsView(QGraphicsView):
             elif isinstance(item, AnnotationPathItem):
                 item.set_style(
                     fill_color=settings.fill_color,
+                    fill_alpha=settings.fill_alpha,
                     stroke_color=settings.stroke_color,
                     stroke_width=settings.stroke_width,
                     outline_color=settings.outline_color,
@@ -916,6 +1033,7 @@ class EditorGraphicsView(QGraphicsView):
                         text=item.toPlainText(),
                         position=(item.scene_position().x(), item.scene_position().y()),
                         fill_color=item._fill_color,
+                        fill_alpha=item._fill_alpha,
                         stroke_color=item._stroke_color,
                         stroke_width=item._stroke_width,
                         outline_color=item._outline_color,
@@ -933,6 +1051,7 @@ class EditorGraphicsView(QGraphicsView):
                         points=points,
                         closed=item._closed,
                         fill_color=item._fill_color,
+                        fill_alpha=item._fill_alpha,
                         stroke_color=item._stroke_color,
                         stroke_width=item._stroke_width,
                         outline_color=item._outline_color,
@@ -965,14 +1084,7 @@ class EditorGraphicsView(QGraphicsView):
         item = self.selected_text_item()
         if item is None:
             return
-        text, ok = QInputDialog.getText(
-            self,
-            "Edit text",
-            "Enter annotation text:",
-            text=item.toPlainText(),
-        )
-        if ok:
-            item.set_text(text or "")
+        self.annotation_double_clicked.emit(item)
 
     # ------------------------------------------------------------------
     def _current_annotation_settings(self) -> AnnotationSettings:
@@ -992,8 +1104,9 @@ class EditorGraphicsView(QGraphicsView):
             base_text,
             position=pos,
             fill_color=settings.fill_color,
+            fill_alpha=settings.fill_alpha,
             stroke_color=settings.stroke_color,
-            stroke_width=settings.stroke_width,
+            stroke_width=existing.stroke_width if existing else 0.0,
             outline_color=settings.outline_color,
             outline_width=settings.outline_width,
             shadow_enabled=settings.shadow_enabled,
@@ -1004,6 +1117,7 @@ class EditorGraphicsView(QGraphicsView):
         if existing:
             item.set_style(
                 fill_color=existing.fill_color,
+                fill_alpha=existing.fill_alpha,
                 stroke_color=existing.stroke_color,
                 stroke_width=existing.stroke_width,
                 outline_color=existing.outline_color,
@@ -1029,7 +1143,12 @@ class EditorGraphicsView(QGraphicsView):
         self._pending_path_item = AnnotationPathItem(
             [pos],
             closed=self._annotation_mode == "polygon",
-            fill_color=self._current_annotation_settings().fill_color,
+            fill_color=self._current_annotation_settings().fill_color
+            if self._annotation_mode == "polygon"
+            else None,
+            fill_alpha=self._current_annotation_settings().fill_alpha
+            if self._annotation_mode == "polygon"
+            else 0.0,
             stroke_color=self._current_annotation_settings().stroke_color,
             stroke_width=self._current_annotation_settings().stroke_width,
             outline_color=self._current_annotation_settings().outline_color,
@@ -1075,7 +1194,8 @@ class EditorGraphicsView(QGraphicsView):
         item = AnnotationPathItem(
             path_points,
             closed=self._annotation_mode == "polygon" if closed is None else closed,
-            fill_color=settings.fill_color,
+            fill_color=settings.fill_color if (closed or self._annotation_mode == "polygon") else None,
+            fill_alpha=settings.fill_alpha if (closed or self._annotation_mode == "polygon") else 0.0,
             stroke_color=settings.stroke_color,
             stroke_width=settings.stroke_width,
             outline_color=settings.outline_color,
@@ -1086,6 +1206,7 @@ class EditorGraphicsView(QGraphicsView):
         if existing:
             item.set_style(
                 fill_color=existing.fill_color,
+                fill_alpha=getattr(existing, "fill_alpha", settings.fill_alpha),
                 stroke_color=existing.stroke_color,
                 stroke_width=existing.stroke_width,
                 outline_color=existing.outline_color,
@@ -1417,6 +1538,17 @@ class EditorGraphicsView(QGraphicsView):
             self._finalize_path()
             event.accept()
             return
+
+        if self._annotation_mode == "select" and event.button() == Qt.MouseButton.LeftButton:
+            item = self.itemAt(event.position().toPoint())
+            if isinstance(item, (AnnotationTextItem, AnnotationPathItem)):
+                if not item.isSelected():
+                    self._scene.clearSelection()
+                    item.setSelected(True)
+                self.annotation_double_clicked.emit(item)
+                event.accept()
+                return
+
         super().mouseDoubleClickEvent(event)
 
     # ------------------------------------------------------------------
@@ -1657,7 +1789,9 @@ class EditorGraphicsView(QGraphicsView):
         return rendered
 
     @staticmethod
-    def _normalise_color(value: str) -> Tuple[str, Tuple[int, int, int]]:
+    def _normalise_color(value: Optional[str]) -> Tuple[str, Tuple[int, int, int]]:
+        if not value:
+            return ("transparent", (255, 255, 255))
         color = QColor(value)
         if not color.isValid():
             color = QColor("#FFFFFF")
@@ -2123,6 +2257,7 @@ class EditorView(QWidget):
         self._view.auto_handles_changed.connect(self._handle_auto_dest_points_adjusted)
         self._view.annotations_changed.connect(self._handle_annotations_changed)
         self._view.selection_changed.connect(self._update_annotation_selection_state)
+        self._view.annotation_double_clicked.connect(self._handle_annotation_double_clicked)
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
@@ -2718,7 +2853,16 @@ class EditorView(QWidget):
         self._selection_style_button.setEnabled(self._view.selected_annotation() is not None)
 
     def _open_annotation_presets_dialog(self) -> None:
-        dialog = _AnnotationStyleDialog(self, self._state.annotations, allow_font=True)
+        tool = self._state.annotations.active_tool
+        dialog = _AnnotationStyleDialog(
+            self,
+            self._state.annotations,
+            allow_font=tool == "text",
+            allow_fill=tool != "line",
+            allow_stroke=tool != "text",
+            allow_outline=True,
+            allow_text_value=False,
+        )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
 
@@ -2727,17 +2871,24 @@ class EditorView(QWidget):
         self._state.annotations = updated
         self._view.set_annotation_settings(updated, restyle_existing=False)
 
-    def _open_selected_annotation_dialog(self) -> None:
-        item = self._view.selected_annotation()
+    def _open_selected_annotation_dialog(self, force_item: Optional[QGraphicsItem] = None) -> None:
+        item = force_item or self._view.selected_annotation()
         if item is None:
             return
 
         base = self._state.annotations
         allow_font = isinstance(item, AnnotationTextItem)
+        allow_fill = isinstance(item, AnnotationTextItem) or (
+            isinstance(item, AnnotationPathItem) and item._closed
+        )
+        allow_stroke = not isinstance(item, AnnotationTextItem)
+        allow_text_value = isinstance(item, AnnotationTextItem)
+
         if isinstance(item, AnnotationTextItem):
             base = replace(
                 base,
                 fill_color=item._fill_color,
+                fill_alpha=item._fill_alpha,
                 stroke_color=item._stroke_color,
                 stroke_width=item._stroke_width,
                 outline_color=item._outline_color,
@@ -2751,6 +2902,7 @@ class EditorView(QWidget):
             base = replace(
                 base,
                 fill_color=item._fill_color,
+                fill_alpha=item._fill_alpha,
                 stroke_color=item._stroke_color,
                 stroke_width=item._stroke_width,
                 outline_color=item._outline_color,
@@ -2759,33 +2911,59 @@ class EditorView(QWidget):
                 shadow_blur=item._shadow_blur,
             )
 
-        dialog = _AnnotationStyleDialog(self, base, allow_font=allow_font)
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        snapshot_settings = base
+        snapshot_text = item.toPlainText() if isinstance(item, AnnotationTextItem) else None
+
+        def _apply_to_item(updated: AnnotationSettings, maybe_text: Optional[str]) -> None:
+            if isinstance(item, AnnotationTextItem):
+                item.set_style(
+                    fill_color=updated.fill_color,
+                    fill_alpha=updated.fill_alpha,
+                    stroke_color=updated.stroke_color,
+                    stroke_width=0.0,
+                    outline_color=updated.outline_color,
+                    outline_width=updated.outline_width,
+                    shadow_enabled=updated.shadow_enabled,
+                    shadow_blur=updated.shadow_blur,
+                    font_family=updated.font_family,
+                    font_size=updated.font_size,
+                )
+                if maybe_text is not None:
+                    item.set_text(maybe_text or "")
+            elif isinstance(item, AnnotationPathItem):
+                item.set_style(
+                    fill_color=updated.fill_color if allow_fill else None,
+                    fill_alpha=updated.fill_alpha if allow_fill else 0.0,
+                    stroke_color=updated.stroke_color,
+                    stroke_width=updated.stroke_width,
+                    outline_color=updated.outline_color,
+                    outline_width=updated.outline_width,
+                    shadow_enabled=updated.shadow_enabled,
+                    shadow_blur=updated.shadow_blur,
+                )
+            self._emit_annotations()
+
+        dialog = _AnnotationStyleDialog(
+            self,
+            base,
+            allow_font=allow_font,
+            allow_fill=allow_fill,
+            allow_stroke=allow_stroke,
+            allow_outline=True,
+            allow_text_value=allow_text_value,
+            text_value=item.toPlainText() if isinstance(item, AnnotationTextItem) else "",
+            live_apply=_apply_to_item,
+        )
+
+        result = dialog.exec()
+        if result != QDialog.DialogCode.Accepted:
+            _apply_to_item(snapshot_settings, snapshot_text)
             return
 
-        new_settings = dialog.result_settings()
-        if isinstance(item, AnnotationTextItem):
-            item.set_style(
-                fill_color=new_settings.fill_color,
-                stroke_color=new_settings.stroke_color,
-                stroke_width=new_settings.stroke_width,
-                outline_color=new_settings.outline_color,
-                outline_width=new_settings.outline_width,
-                shadow_enabled=new_settings.shadow_enabled,
-                shadow_blur=new_settings.shadow_blur,
-                font_family=new_settings.font_family,
-                font_size=new_settings.font_size,
-            )
-        elif isinstance(item, AnnotationPathItem):
-            item.set_style(
-                fill_color=new_settings.fill_color,
-                stroke_color=new_settings.stroke_color,
-                stroke_width=new_settings.stroke_width,
-                outline_color=new_settings.outline_color,
-                outline_width=new_settings.outline_width,
-                shadow_enabled=new_settings.shadow_enabled,
-                shadow_blur=new_settings.shadow_blur,
-            )
+        _apply_to_item(dialog.result_settings(), dialog.text_value())
+
+    def _handle_annotation_double_clicked(self, item: QGraphicsItem) -> None:
+        self._open_selected_annotation_dialog(force_item=item)
 
 
     def _choose_annotation_color(self, role: str) -> None:
@@ -3506,7 +3684,7 @@ class EditorView(QWidget):
             " }"
         )
         button.setStyleSheet(style)
-        button.setText(normalized)
-        button.setToolTip(normalized)
+        button.setText("None" if color is None else normalized)
+        button.setToolTip("None" if color is None else normalized)
         return normalized, rgb
         self._color_workers.clear()

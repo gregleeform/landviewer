@@ -105,7 +105,8 @@ class AnnotationSettings:
     """Holds drawing tool presets and saved annotation items."""
 
     active_tool: str = "select"
-    fill_color: str = "#ffffff"
+    fill_color: Optional[str] = "#ffffff"
+    fill_alpha: float = 1.0
     stroke_color: str = "#ff0000"
     stroke_width: float = 2.0
     outline_color: str = "#000000"
@@ -121,6 +122,7 @@ class AnnotationSettings:
 
         self.active_tool = "select"
         self.fill_color = "#ffffff"
+        self.fill_alpha = 1.0
         self.stroke_color = "#ff0000"
         self.stroke_width = 2.0
         self.outline_color = "#000000"
@@ -139,9 +141,10 @@ class AnnotationText:
     kind: Literal["text"] = "text"
     text: str = "새 텍스트"
     position: Tuple[float, float] = (0.0, 0.0)
-    fill_color: str = "#ffffff"
+    fill_color: Optional[str] = "#ffffff"
+    fill_alpha: float = 1.0
     stroke_color: str = "#ff0000"
-    stroke_width: float = 2.0
+    stroke_width: float = 0.0
     outline_color: str = "#000000"
     outline_width: float = 1.0
     shadow_enabled: bool = True
@@ -157,7 +160,8 @@ class AnnotationPath:
     kind: Literal["path"] = "path"
     points: List[Tuple[float, float]] = field(default_factory=list)
     closed: bool = False
-    fill_color: str = "#ffffff"
+    fill_color: Optional[str] = "#ffffff"
+    fill_alpha: float = 1.0
     stroke_color: str = "#ff0000"
     stroke_width: float = 2.0
     outline_color: str = "#000000"
