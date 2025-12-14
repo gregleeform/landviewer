@@ -787,6 +787,7 @@ class EditorGraphicsView(QGraphicsView):
     annotations_changed = Signal(list)
     selection_changed = Signal()
     annotation_double_clicked = Signal(object)
+    annotation_committed = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -1134,6 +1135,7 @@ class EditorGraphicsView(QGraphicsView):
             self._scene.clearSelection()
             item.setSelected(True)
             self._emit_annotations()
+            self.annotation_committed.emit()
 
     # ------------------------------------------------------------------
     def _start_path(self, pos: QPointF) -> None:
@@ -1220,6 +1222,7 @@ class EditorGraphicsView(QGraphicsView):
         self._cancel_path()
         if preset:
             self._emit_annotations()
+            self.annotation_committed.emit()
 
     # ------------------------------------------------------------------
     def _cancel_path(self) -> None:
@@ -1557,7 +1560,26 @@ class EditorGraphicsView(QGraphicsView):
             self._cancel_path()
             event.accept()
             return
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self._delete_selected_annotations():
+                event.accept()
+                return
         super().keyPressEvent(event)
+
+    # ------------------------------------------------------------------
+    def _delete_selected_annotations(self) -> bool:
+        removed = False
+        for item in list(self._scene.selectedItems()):
+            if isinstance(item, (AnnotationTextItem, AnnotationPathItem)):
+                if item in self._annotation_items:
+                    self._annotation_items.remove(item)
+                self._scene.removeItem(item)
+                removed = True
+
+        if removed:
+            self._emit_annotations()
+            self.selection_changed.emit()
+        return removed
 
     # ------------------------------------------------------------------
     def _compute_default_points(self) -> Optional[List[QPointF]]:
@@ -2258,6 +2280,7 @@ class EditorView(QWidget):
         self._view.annotations_changed.connect(self._handle_annotations_changed)
         self._view.selection_changed.connect(self._update_annotation_selection_state)
         self._view.annotation_double_clicked.connect(self._handle_annotation_double_clicked)
+        self._view.annotation_committed.connect(self._handle_annotation_committed)
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
@@ -2841,9 +2864,31 @@ class EditorView(QWidget):
     def _handle_annotation_tool_selected(self, tool: str, checked: bool) -> None:
         if not checked:
             return
+        self._set_active_annotation_tool(tool)
+
+    def _set_active_annotation_tool(self, tool: str) -> None:
         self._state.annotations.active_tool = tool
         self._view.set_annotation_mode(tool)
+
+        self._select_tool.blockSignals(True)
+        self._text_tool.blockSignals(True)
+        self._line_tool.blockSignals(True)
+        self._polygon_tool.blockSignals(True)
+
+        self._select_tool.setChecked(tool == "select")
+        self._text_tool.setChecked(tool == "text")
+        self._line_tool.setChecked(tool == "line")
+        self._polygon_tool.setChecked(tool == "polygon")
+
+        self._select_tool.blockSignals(False)
+        self._text_tool.blockSignals(False)
+        self._line_tool.blockSignals(False)
+        self._polygon_tool.blockSignals(False)
+
         self._update_annotation_selection_state()
+
+    def _handle_annotation_committed(self) -> None:
+        self._set_active_annotation_tool("select")
 
     def _handle_edit_text(self) -> None:
         self._view.edit_selected_text()
