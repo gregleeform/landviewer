@@ -1,7 +1,7 @@
 """Editor view implementing manual overlay alignment for the prototype."""
 from __future__ import annotations
 
-from typing import List, Optional, Sequence, Tuple
+from typing import Callable, List, Mapping, Optional, Sequence, Tuple
 from dataclasses import replace
 
 import math
@@ -705,6 +705,7 @@ class _AnnotationStyleDialog(QDialog):
         allow_text_value: bool = False,
         text_value: str = "",
         live_apply=None,
+        reorder_actions: Optional[Mapping[str, Callable[[], None]]] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Annotation options")
@@ -715,6 +716,7 @@ class _AnnotationStyleDialog(QDialog):
         self._allow_outline = allow_outline
         self._allow_text_value = allow_text_value
         self._live_apply = live_apply
+        self._reorder_actions = reorder_actions or {}
 
         self._fill_button = QPushButton()
         self._fill_button.setObjectName("annotationDialogFillColor")
@@ -834,6 +836,22 @@ class _AnnotationStyleDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addLayout(form)
+
+        if self._reorder_actions:
+            order_row = QHBoxLayout()
+            for label, key in (
+                ("Bring to front", "front"),
+                ("Bring forward", "forward"),
+                ("Send backward", "backward"),
+                ("Send to back", "back"),
+            ):
+                if key in self._reorder_actions:
+                    btn = QPushButton(label)
+                    btn.clicked.connect(self._reorder_actions[key])
+                    order_row.addWidget(btn)
+            order_row.addStretch(1)
+            layout.addLayout(order_row)
+
         layout.addWidget(buttons)
         self.setLayout(layout)
 
@@ -1677,30 +1695,51 @@ class EditorGraphicsView(QGraphicsView):
         if target is not None and target in self._annotation_items:
             menu = QMenu(self)
             bring_front = menu.addAction("Bring to front")
+            bring_forward = menu.addAction("Bring forward")
+            send_backward = menu.addAction("Send backward")
             send_back = menu.addAction("Send to back")
             chosen = menu.exec(event.globalPos())
             if chosen == bring_front:
-                self._raise_annotation(target)
+                self._reorder_annotation(target, "front")
+            elif chosen == bring_forward:
+                self._reorder_annotation(target, "forward")
+            elif chosen == send_backward:
+                self._reorder_annotation(target, "backward")
             elif chosen == send_back:
-                self._lower_annotation(target)
+                self._reorder_annotation(target, "back")
             return
 
         super().contextMenuEvent(event)
 
     # ------------------------------------------------------------------
-    def _raise_annotation(self, item: QGraphicsItem) -> None:
-        if not self._annotation_items:
+    def _reorder_annotation(self, item: QGraphicsItem, direction: str) -> None:
+        if not self._annotation_items or item not in self._annotation_items:
             return
-        max_z = max(entry.zValue() for entry in self._annotation_items)
-        item.setZValue(max_z + 1.0)
-        self._emit_annotations()
 
-    def _lower_annotation(self, item: QGraphicsItem) -> None:
-        if not self._annotation_items:
+        ordered = sorted(self._annotation_items, key=lambda entry: entry.zValue())
+        current_index = ordered.index(item)
+        target_index = current_index
+
+        if direction == "front":
+            target_index = len(ordered) - 1
+        elif direction == "back":
+            target_index = 0
+        elif direction == "forward":
+            target_index = min(current_index + 1, len(ordered) - 1)
+        elif direction == "backward":
+            target_index = max(current_index - 1, 0)
+
+        if target_index == current_index:
             return
-        min_z = min(entry.zValue() for entry in self._annotation_items)
-        item.setZValue(min_z - 1.0)
+
+        ordered.pop(current_index)
+        ordered.insert(target_index, item)
+
+        for idx, entry in enumerate(ordered):
+            entry.setZValue(float(idx))
+
         self._emit_annotations()
+        self._refresh_annotation_helper_positions()
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event):  # type: ignore[override]
@@ -3191,7 +3230,7 @@ class EditorView(QWidget):
             self._node_button.setVisible(False)
             return
 
-        scene_rect = item.mapToScene(item.boundingRect()).boundingRect()
+        scene_rect = item.sceneBoundingRect()
         target = scene_rect.topRight() + QPointF(8, -8)
         view_pos = self._view.mapFromScene(target)
 
@@ -3330,6 +3369,13 @@ class EditorView(QWidget):
                 )
             self._emit_annotations()
 
+        reorder_actions = {
+            "front": lambda: self._view._reorder_annotation(item, "front"),
+            "forward": lambda: self._view._reorder_annotation(item, "forward"),
+            "backward": lambda: self._view._reorder_annotation(item, "backward"),
+            "back": lambda: self._view._reorder_annotation(item, "back"),
+        }
+
         dialog = _AnnotationStyleDialog(
             self,
             base,
@@ -3340,6 +3386,7 @@ class EditorView(QWidget):
             allow_text_value=allow_text_value,
             text_value=item.toPlainText() if isinstance(item, AnnotationTextItem) else "",
             live_apply=_apply_to_item,
+            reorder_actions=reorder_actions,
         )
 
         result = dialog.exec()
