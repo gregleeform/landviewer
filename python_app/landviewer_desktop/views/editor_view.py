@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -205,6 +206,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         self._points = [point - self._origin for point in scene_points]
         self._rebuild_path()
         self._rebuild_handles()
+        self._update_handles_visibility()
         self.changed.emit()
 
     def _rebuild_path(self) -> None:
@@ -228,6 +230,12 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
             handle.setPos(point)
             handle.moved.connect(self._handle_vertex_moved)
             self._handles.append(handle)
+        self._update_handles_visibility()
+
+    def _update_handles_visibility(self) -> None:
+        visible = self.isSelected()
+        for handle in self._handles:
+            handle.setVisible(visible)
 
     def _handle_vertex_moved(self, index: int, pos: QPointF) -> None:
         if index < 0 or index >= len(self._points):
@@ -242,6 +250,8 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.changed.emit()
+        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
+            self._update_handles_visibility()
         return QGraphicsPathItem.itemChange(self, change, value)
 
     def set_style(
@@ -1033,6 +1043,7 @@ class EditorGraphicsView(QGraphicsView):
                     AnnotationText(
                         text=item.toPlainText(),
                         position=(item.scene_position().x(), item.scene_position().y()),
+                        z=item.zValue(),
                         fill_color=item._fill_color,
                         fill_alpha=item._fill_alpha,
                         stroke_color=item._stroke_color,
@@ -1051,6 +1062,7 @@ class EditorGraphicsView(QGraphicsView):
                     AnnotationPath(
                         points=points,
                         closed=item._closed,
+                        z=item.zValue(),
                         fill_color=item._fill_color,
                         fill_alpha=item._fill_alpha,
                         stroke_color=item._stroke_color,
@@ -1075,6 +1087,57 @@ class EditorGraphicsView(QGraphicsView):
             if isinstance(item, (AnnotationTextItem, AnnotationPathItem)):
                 return item
         return None
+
+    # ------------------------------------------------------------------
+    def duplicate_selected_annotation(self) -> None:
+        item = self.selected_annotation()
+        if item is None:
+            return
+
+        offset = QPointF(12, 12)
+        duplicated: Optional[QGraphicsItem] = None
+
+        if isinstance(item, AnnotationTextItem):
+            duplicated = AnnotationTextItem(
+                item.toPlainText(),
+                position=item.scene_position() + offset,
+                fill_color=item._fill_color,
+                fill_alpha=item._fill_alpha,
+                stroke_color=item._stroke_color,
+                stroke_width=item._stroke_width,
+                outline_color=item._outline_color,
+                outline_width=item._outline_width,
+                shadow_enabled=item._shadow_enabled,
+                shadow_blur=item._shadow_blur,
+                font_family=item._font_family,
+                font_size=item._font_size,
+            )
+        elif isinstance(item, AnnotationPathItem):
+            points = [point + offset for point in item.scene_points()]
+            duplicated = AnnotationPathItem(
+                points,
+                closed=item._closed,
+                fill_color=item._fill_color,
+                fill_alpha=item._fill_alpha,
+                stroke_color=item._stroke_color,
+                stroke_width=item._stroke_width,
+                outline_color=item._outline_color,
+                outline_width=item._outline_width,
+                shadow_enabled=item._shadow_enabled,
+                shadow_blur=item._shadow_blur,
+            )
+
+        if duplicated is None:
+            return
+
+        duplicated.setZValue(item.zValue() + 0.01)
+        duplicated.changed.connect(self._emit_annotations)  # type: ignore[attr-defined]
+        self._scene.addItem(duplicated)
+        self._annotation_items.append(duplicated)
+        self._scene.clearSelection()
+        duplicated.setSelected(True)
+        self._emit_annotations()
+        self.annotation_committed.emit()
 
     # ------------------------------------------------------------------
     def has_selected_text(self) -> bool:
@@ -1128,6 +1191,7 @@ class EditorGraphicsView(QGraphicsView):
                 font_family=existing.font_family,
                 font_size=existing.font_size,
             )
+            item.setZValue(getattr(existing, "z", item.zValue()))
         item.changed.connect(self._emit_annotations)
         self._scene.addItem(item)
         self._annotation_items.append(item)
@@ -1216,6 +1280,7 @@ class EditorGraphicsView(QGraphicsView):
                 shadow_enabled=existing.shadow_enabled,
                 shadow_blur=existing.shadow_blur,
             )
+            item.setZValue(getattr(existing, "z", item.zValue()))
         item.changed.connect(self._emit_annotations)
         self._scene.addItem(item)
         self._annotation_items.append(item)
@@ -1473,6 +1538,42 @@ class EditorGraphicsView(QGraphicsView):
                 event.accept()
                 return
         super().mousePressEvent(event)
+
+    # ------------------------------------------------------------------
+    def contextMenuEvent(self, event):  # type: ignore[override]
+        target = self.itemAt(event.position().toPoint())
+        while target is not None and not isinstance(
+            target, (AnnotationTextItem, AnnotationPathItem)
+        ):
+            target = target.parentItem()
+
+        if target is not None and target in self._annotation_items:
+            menu = QMenu(self)
+            bring_front = menu.addAction("Bring to front")
+            send_back = menu.addAction("Send to back")
+            chosen = menu.exec(event.globalPos())
+            if chosen == bring_front:
+                self._raise_annotation(target)
+            elif chosen == send_back:
+                self._lower_annotation(target)
+            return
+
+        super().contextMenuEvent(event)
+
+    # ------------------------------------------------------------------
+    def _raise_annotation(self, item: QGraphicsItem) -> None:
+        if not self._annotation_items:
+            return
+        max_z = max(entry.zValue() for entry in self._annotation_items)
+        item.setZValue(max_z + 1.0)
+        self._emit_annotations()
+
+    def _lower_annotation(self, item: QGraphicsItem) -> None:
+        if not self._annotation_items:
+            return
+        min_z = min(entry.zValue() for entry in self._annotation_items)
+        item.setZValue(min_z - 1.0)
+        self._emit_annotations()
 
     # ------------------------------------------------------------------
     def resizeEvent(self, event):  # type: ignore[override]
@@ -2282,6 +2383,14 @@ class EditorView(QWidget):
         self._view.annotation_double_clicked.connect(self._handle_annotation_double_clicked)
         self._view.annotation_committed.connect(self._handle_annotation_committed)
 
+        self._duplicate_button = QPushButton("Copy")
+        self._duplicate_button.setParent(self._view.viewport())
+        self._duplicate_button.setVisible(False)
+        self._duplicate_button.setObjectName("annotationDuplicateButton")
+        self._duplicate_button.setFixedHeight(26)
+        self._duplicate_button.clicked.connect(self._handle_duplicate_selected)
+        self._tracked_annotation_item: Optional[QGraphicsItem] = None
+
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
         self._preview_panel.auto_point_moved.connect(self._handle_auto_source_point_adjusted)
@@ -2893,9 +3002,57 @@ class EditorView(QWidget):
     def _handle_edit_text(self) -> None:
         self._view.edit_selected_text()
 
+    def resizeEvent(self, event):  # type: ignore[override]
+        super().resizeEvent(event)
+        self._refresh_duplicate_button_position()
+
     def _update_annotation_selection_state(self) -> None:
+        selected = self._view.selected_annotation()
+        if self._tracked_annotation_item is not None and self._tracked_annotation_item is not selected:
+            try:
+                self._tracked_annotation_item.changed.disconnect(self._handle_selected_item_changed)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            self._tracked_annotation_item = None
+
+        self._tracked_annotation_item = selected
+
+        if selected is not None:
+            try:
+                selected.changed.connect(self._handle_selected_item_changed)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            self._duplicate_button.setVisible(True)
+            self._refresh_duplicate_button_position()
+        else:
+            self._duplicate_button.setVisible(False)
+
         self._edit_text_button.setEnabled(self._view.has_selected_text())
-        self._selection_style_button.setEnabled(self._view.selected_annotation() is not None)
+        self._selection_style_button.setEnabled(selected is not None)
+
+    def _handle_selected_item_changed(self) -> None:
+        self._refresh_duplicate_button_position()
+
+    def _refresh_duplicate_button_position(self) -> None:
+        if not self._duplicate_button.isVisible():
+            return
+
+        item = self._tracked_annotation_item or self._view.selected_annotation()
+        if item is None:
+            self._duplicate_button.setVisible(False)
+            return
+
+        scene_rect = item.mapToScene(item.boundingRect()).boundingRect()
+        target = scene_rect.topRight() + QPointF(8, -8)
+        view_pos = self._view.mapFromScene(target)
+
+        x = max(0, min(int(view_pos.x()), self._view.viewport().width() - self._duplicate_button.width()))
+        y = max(0, min(int(view_pos.y()), self._view.viewport().height() - self._duplicate_button.height()))
+        self._duplicate_button.move(x, y)
+
+    def _handle_duplicate_selected(self) -> None:
+        self._view.duplicate_selected_annotation()
+        self._refresh_duplicate_button_position()
 
     def _open_annotation_presets_dialog(self) -> None:
         tool = self._state.annotations.active_tool

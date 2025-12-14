@@ -141,6 +141,7 @@ class AnnotationText:
     kind: Literal["text"] = "text"
     text: str = "새 텍스트"
     position: Tuple[float, float] = (0.0, 0.0)
+    z: float = 4.5
     fill_color: Optional[str] = "#ffffff"
     fill_alpha: float = 1.0
     stroke_color: str = "#ff0000"
@@ -160,6 +161,7 @@ class AnnotationPath:
     kind: Literal["path"] = "path"
     points: List[Tuple[float, float]] = field(default_factory=list)
     closed: bool = False
+    z: float = 4.0
     fill_color: Optional[str] = "#ffffff"
     fill_alpha: float = 1.0
     stroke_color: str = "#ff0000"
