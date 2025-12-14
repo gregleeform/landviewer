@@ -14,6 +14,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QComboBox,
     QColorDialog,
     QDialog,
     QDialogButtonBox,
@@ -498,6 +499,7 @@ class AnnotationTextItem(QGraphicsTextItem):
     def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
         if change in (
             QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemPositionChange,
             QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged,
         ):
             self.changed.emit()
@@ -1237,6 +1239,9 @@ class EditorGraphicsView(QGraphicsView):
                 fill_alpha=item._fill_alpha,
                 stroke_color=item._stroke_color,
                 stroke_width=item._stroke_width,
+                stroke_pattern=item._stroke_pattern,
+                start_marker=item._start_marker,
+                end_marker=item._end_marker,
                 outline_color=item._outline_color,
                 outline_width=item._outline_width,
                 shadow_enabled=item._shadow_enabled,
@@ -1319,24 +1324,24 @@ class EditorGraphicsView(QGraphicsView):
 
     # ------------------------------------------------------------------
     def _start_path(self, pos: QPointF) -> None:
+        settings = self._current_annotation_settings()
         self._pending_path = [pos]
         if self._pending_path_item:
             self._scene.removeItem(self._pending_path_item)
         self._pending_path_item = AnnotationPathItem(
             [pos],
             closed=self._annotation_mode == "polygon",
-            fill_color=self._current_annotation_settings().fill_color
-            if self._annotation_mode == "polygon"
-            else None,
-            fill_alpha=self._current_annotation_settings().fill_alpha
-            if self._annotation_mode == "polygon"
-            else 0.0,
-            stroke_color=self._current_annotation_settings().stroke_color,
-            stroke_width=self._current_annotation_settings().stroke_width,
-            outline_color=self._current_annotation_settings().outline_color,
-            outline_width=self._current_annotation_settings().outline_width,
-            shadow_enabled=self._current_annotation_settings().shadow_enabled,
-            shadow_blur=self._current_annotation_settings().shadow_blur,
+            fill_color=settings.fill_color if self._annotation_mode == "polygon" else None,
+            fill_alpha=settings.fill_alpha if self._annotation_mode == "polygon" else 0.0,
+            stroke_color=settings.stroke_color,
+            stroke_width=settings.stroke_width,
+            stroke_pattern=settings.stroke_pattern,
+            start_marker=settings.start_marker,
+            end_marker=settings.end_marker,
+            outline_color=settings.outline_color,
+            outline_width=settings.outline_width,
+            shadow_enabled=settings.shadow_enabled,
+            shadow_blur=settings.shadow_blur,
         )
         self._pending_path_item.setOpacity(0.6)
         self._scene.addItem(self._pending_path_item)
