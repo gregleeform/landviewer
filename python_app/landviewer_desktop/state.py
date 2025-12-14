@@ -113,6 +113,9 @@ class AnnotationSettings:
     outline_width: float = 1.0
     shadow_enabled: bool = True
     shadow_blur: float = 8.0
+    stroke_pattern: str = "solid"
+    start_marker: str = "none"
+    end_marker: str = "none"
     font_family: str = "Noto Sans KR"
     font_size: int = 28
     annotations: List["AnnotationItem"] = field(default_factory=list)
@@ -129,6 +132,9 @@ class AnnotationSettings:
         self.outline_width = 1.0
         self.shadow_enabled = True
         self.shadow_blur = 8.0
+        self.stroke_pattern = "solid"
+        self.start_marker = "none"
+        self.end_marker = "none"
         self.font_family = "Noto Sans KR"
         self.font_size = 28
         self.annotations = []
@@ -150,6 +156,9 @@ class AnnotationText:
     outline_width: float = 1.0
     shadow_enabled: bool = True
     shadow_blur: float = 8.0
+    stroke_pattern: str = "solid"
+    start_marker: str = "none"
+    end_marker: str = "none"
     font_family: str = "Noto Sans KR"
     font_size: int = 28
 
@@ -170,6 +179,9 @@ class AnnotationPath:
     outline_width: float = 1.0
     shadow_enabled: bool = True
     shadow_blur: float = 8.0
+    stroke_pattern: str = "solid"
+    start_marker: str = "none"
+    end_marker: str = "none"
 
 
 # Alias used for collections and type hints.

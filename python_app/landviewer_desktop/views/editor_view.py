@@ -163,6 +163,9 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         fill_alpha: float,
         stroke_color: str,
         stroke_width: float,
+        stroke_pattern: str,
+        start_marker: str,
+        end_marker: str,
         outline_color: str,
         outline_width: float,
         shadow_enabled: bool,
@@ -175,6 +178,9 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         self._fill_alpha = max(0.0, min(fill_alpha, 1.0))
         self._stroke_color = stroke_color
         self._stroke_width = stroke_width
+        self._stroke_pattern = stroke_pattern
+        self._start_marker = start_marker
+        self._end_marker = end_marker
         self._outline_color = outline_color
         self._outline_width = outline_width
         self._shadow_enabled = shadow_enabled
@@ -182,6 +188,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         self._handles: List[AnnotationVertexHandle] = []
         self._points: List[QPointF] = []
         self._origin = QPointF(0, 0)
+        self._edit_mode = False
         self._shadow_effect = QGraphicsDropShadowEffect()
         self._shadow_effect.setBlurRadius(max(0.0, self._shadow_blur))
         self._shadow_effect.setOffset(self._shadow_blur * 0.12, self._shadow_blur * 0.12)
@@ -233,7 +240,7 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         self._update_handles_visibility()
 
     def _update_handles_visibility(self) -> None:
-        visible = self.isSelected()
+        visible = self._edit_mode
         for handle in self._handles:
             handle.setVisible(visible)
 
@@ -250,9 +257,13 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         elif change == QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged:
             self.setCursor(Qt.CursorShape.OpenHandCursor)
             self.changed.emit()
-        elif change == QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged:
-            self._update_handles_visibility()
         return QGraphicsPathItem.itemChange(self, change, value)
+
+    def set_edit_mode(self, enabled: bool) -> None:
+        self._edit_mode = enabled
+        self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, not enabled)
+        self._update_handles_visibility()
+        self.changed.emit()
 
     def set_style(
         self,
@@ -265,6 +276,9 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         outline_width: Optional[float] = None,
         shadow_enabled: Optional[bool] = None,
         shadow_blur: Optional[float] = None,
+        stroke_pattern: Optional[str] = None,
+        start_marker: Optional[str] = None,
+        end_marker: Optional[str] = None,
     ) -> None:
         if fill_color is not None:
             self._fill_color = fill_color
@@ -274,6 +288,12 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
             self._stroke_color = stroke_color
         if stroke_width is not None:
             self._stroke_width = stroke_width
+        if stroke_pattern is not None:
+            self._stroke_pattern = stroke_pattern
+        if start_marker is not None:
+            self._start_marker = start_marker
+        if end_marker is not None:
+            self._end_marker = end_marker
         if outline_color is not None:
             self._outline_color = outline_color
         if outline_width is not None:
@@ -300,6 +320,14 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
+        style_map = {
+            "solid": Qt.PenStyle.SolidLine,
+            "dashed": Qt.PenStyle.DashLine,
+            "dotted": Qt.PenStyle.DotLine,
+            "dash-dot": Qt.PenStyle.DashDotLine,
+        }
+        pen_style = style_map.get(self._stroke_pattern, Qt.PenStyle.SolidLine)
+
         if self._shadow_enabled and self._shadow_blur > 0:
             shadow_pen = QPen(QColor(0, 0, 0, 80), max(1.0, self._shadow_blur / 4))
             shadow_pen.setCosmetic(True)
@@ -324,9 +352,12 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
             stroke_pen.setCosmetic(True)
             stroke_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
             stroke_pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            stroke_pen.setStyle(pen_style)
             painter.setPen(stroke_pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(self.path())
+
+            self._draw_markers(painter)
 
         if self._closed and self._fill_color and self._fill_alpha > 0:
             painter.setPen(Qt.PenStyle.NoPen)
@@ -357,6 +388,51 @@ class AnnotationPathItem(QObject, QGraphicsPathItem):
                     handle_size,
                 )
                 painter.fillRect(handle_rect, QColor("#9ca3af"))
+
+        painter.restore()
+
+    def _draw_markers(self, painter: QPainter) -> None:
+        points = self.scene_points()
+        if len(points) < 2:
+            return
+
+        def _direction(a: QPointF, b: QPointF) -> QPointF:
+            delta = b - a
+            length = (delta.x() ** 2 + delta.y() ** 2) ** 0.5 or 1.0
+            return QPointF(delta.x() / length, delta.y() / length)
+
+        pen = painter.pen()
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+
+        def _draw_arrow(at: QPointF, direction: QPointF) -> None:
+            size = max(6.0, pen.widthF() * 2.2)
+            ortho = QPointF(-direction.y(), direction.x())
+            tail = at - direction * size
+            left = tail + ortho * (size * 0.6)
+            right = tail - ortho * (size * 0.6)
+            painter.drawPolygon(at, left, right)
+
+        def _draw_circle(at: QPointF) -> None:
+            radius = max(3.0, pen.widthF() * 1.4)
+            painter.drawEllipse(at, radius, radius)
+
+        painter.save()
+        painter.setPen(pen)
+        painter.setBrush(QBrush(pen.color()))
+
+        start_dir = _direction(points[1], points[0])
+        end_dir = _direction(points[-2], points[-1])
+
+        if self._start_marker == "arrow":
+            _draw_arrow(points[0], start_dir)
+        elif self._start_marker == "circle":
+            _draw_circle(points[0])
+
+        if self._end_marker == "arrow":
+            _draw_arrow(points[-1], end_dir)
+        elif self._end_marker == "circle":
+            _draw_circle(points[-1])
 
         painter.restore()
 
@@ -418,6 +494,14 @@ class AnnotationTextItem(QGraphicsTextItem):
         self._apply_font()
         self._rebuild_path()
         self.setGraphicsEffect(self._shadow_effect if self._shadow_enabled and self._shadow_blur > 0 else None)
+
+    def itemChange(self, change: QGraphicsItem.GraphicsItemChange, value):  # type: ignore[override]
+        if change in (
+            QGraphicsItem.GraphicsItemChange.ItemPositionHasChanged,
+            QGraphicsItem.GraphicsItemChange.ItemSelectedHasChanged,
+        ):
+            self.changed.emit()
+        return QGraphicsTextItem.itemChange(self, change, value)
 
     def _apply_font(self) -> None:
         font = QFont(self._font_family, self._font_size)
@@ -638,6 +722,26 @@ class _AnnotationStyleDialog(QDialog):
         self._stroke_button.setObjectName("annotationDialogStrokeColor")
         self._outline_button = QPushButton()
         self._outline_button.setObjectName("annotationDialogOutlineColor")
+        self._pattern_combo = QComboBox()
+        for label, value in (
+            ("Solid", "solid"),
+            ("Dashed", "dashed"),
+            ("Dotted", "dotted"),
+            ("Dash-dot", "dash-dot"),
+        ):
+            self._pattern_combo.addItem(label, value)
+        self._pattern_combo.setCurrentIndex(max(0, self._pattern_combo.findData(settings.stroke_pattern)))
+        self._pattern_combo.currentIndexChanged.connect(self._emit_live_update)
+
+        self._start_marker_combo = QComboBox()
+        self._end_marker_combo = QComboBox()
+        for combo in (self._start_marker_combo, self._end_marker_combo):
+            combo.addItem("None", "none")
+            combo.addItem("Arrow", "arrow")
+            combo.addItem("Circle", "circle")
+            combo.currentIndexChanged.connect(self._emit_live_update)
+        self._start_marker_combo.setCurrentIndex(max(0, self._start_marker_combo.findData(settings.start_marker)))
+        self._end_marker_combo.setCurrentIndex(max(0, self._end_marker_combo.findData(settings.end_marker)))
 
         for button, name in (
             (self._fill_button, "fill"),
@@ -708,6 +812,9 @@ class _AnnotationStyleDialog(QDialog):
         if allow_stroke:
             form.addRow("Stroke colour", self._stroke_button)
             form.addRow("Stroke width", self._stroke_width_spin)
+            form.addRow("Line style", self._pattern_combo)
+            form.addRow("Start marker", self._start_marker_combo)
+            form.addRow("End marker", self._end_marker_combo)
 
         if allow_outline:
             form.addRow("Outline colour", self._outline_button)
@@ -779,6 +886,9 @@ class _AnnotationStyleDialog(QDialog):
             fill_alpha=(self._fill_alpha_slider.value() / 100.0) if self._allow_fill else base.fill_alpha,
             stroke_color=self._stroke_button.property("colorValue") if self._allow_stroke else base.stroke_color,
             stroke_width=float(self._stroke_width_spin.value()) if self._allow_stroke else base.stroke_width,
+            stroke_pattern=self._pattern_combo.currentData() if self._allow_stroke else base.stroke_pattern,
+            start_marker=self._start_marker_combo.currentData() if self._allow_stroke else base.start_marker,
+            end_marker=self._end_marker_combo.currentData() if self._allow_stroke else base.end_marker,
             outline_color=self._outline_button.property("colorValue") if self._allow_outline else base.outline_color,
             outline_width=float(self._outline_width_spin.value()) if self._allow_outline else base.outline_width,
             shadow_enabled=self._shadow_checkbox.isChecked(),
@@ -980,6 +1090,9 @@ class EditorGraphicsView(QGraphicsView):
                     fill_alpha=settings.fill_alpha,
                     stroke_color=settings.stroke_color,
                     stroke_width=settings.stroke_width,
+                    stroke_pattern=settings.stroke_pattern,
+                    start_marker=settings.start_marker,
+                    end_marker=settings.end_marker,
                     outline_color=settings.outline_color,
                     outline_width=settings.outline_width,
                     shadow_enabled=settings.shadow_enabled,
@@ -1067,6 +1180,9 @@ class EditorGraphicsView(QGraphicsView):
                         fill_alpha=item._fill_alpha,
                         stroke_color=item._stroke_color,
                         stroke_width=item._stroke_width,
+                        stroke_pattern=item._stroke_pattern,
+                        start_marker=item._start_marker,
+                        end_marker=item._end_marker,
                         outline_color=item._outline_color,
                         outline_width=item._outline_width,
                         shadow_enabled=item._shadow_enabled,
@@ -1264,6 +1380,9 @@ class EditorGraphicsView(QGraphicsView):
             fill_alpha=settings.fill_alpha if (closed or self._annotation_mode == "polygon") else 0.0,
             stroke_color=settings.stroke_color,
             stroke_width=settings.stroke_width,
+            stroke_pattern=settings.stroke_pattern,
+            start_marker=settings.start_marker,
+            end_marker=settings.end_marker,
             outline_color=settings.outline_color,
             outline_width=settings.outline_width,
             shadow_enabled=settings.shadow_enabled,
@@ -1275,6 +1394,9 @@ class EditorGraphicsView(QGraphicsView):
                 fill_alpha=getattr(existing, "fill_alpha", settings.fill_alpha),
                 stroke_color=existing.stroke_color,
                 stroke_width=existing.stroke_width,
+                stroke_pattern=getattr(existing, "stroke_pattern", settings.stroke_pattern),
+                start_marker=getattr(existing, "start_marker", settings.start_marker),
+                end_marker=getattr(existing, "end_marker", settings.end_marker),
                 outline_color=existing.outline_color,
                 outline_width=existing.outline_width,
                 shadow_enabled=existing.shadow_enabled,
@@ -1541,7 +1663,7 @@ class EditorGraphicsView(QGraphicsView):
 
     # ------------------------------------------------------------------
     def contextMenuEvent(self, event):  # type: ignore[override]
-        target = self.itemAt(event.position().toPoint())
+        target = self.itemAt(event.pos())
         while target is not None and not isinstance(
             target, (AnnotationTextItem, AnnotationPathItem)
         ):
@@ -2389,7 +2511,14 @@ class EditorView(QWidget):
         self._duplicate_button.setObjectName("annotationDuplicateButton")
         self._duplicate_button.setFixedHeight(26)
         self._duplicate_button.clicked.connect(self._handle_duplicate_selected)
+        self._node_button = QPushButton("Edit nodes")
+        self._node_button.setParent(self._view.viewport())
+        self._node_button.setVisible(False)
+        self._node_button.setObjectName("annotationNodeButton")
+        self._node_button.setFixedHeight(26)
+        self._node_button.clicked.connect(self._handle_edit_nodes)
         self._tracked_annotation_item: Optional[QGraphicsItem] = None
+        self._node_edit_item: Optional[AnnotationPathItem] = None
 
         self._preview_panel = OverlayPreviewPanel()
         self._preview_panel.point_clicked.connect(self._handle_preview_point_clicked)
@@ -3002,9 +3131,12 @@ class EditorView(QWidget):
     def _handle_edit_text(self) -> None:
         self._view.edit_selected_text()
 
+    def _emit_annotations(self) -> None:
+        self._view._emit_annotations()
+
     def resizeEvent(self, event):  # type: ignore[override]
         super().resizeEvent(event)
-        self._refresh_duplicate_button_position()
+        self._refresh_annotation_helper_positions()
 
     def _update_annotation_selection_state(self) -> None:
         selected = self._view.selected_annotation()
@@ -3014,6 +3146,7 @@ class EditorView(QWidget):
             except Exception:
                 pass
             self._tracked_annotation_item = None
+            self._set_node_edit_target(None)
 
         self._tracked_annotation_item = selected
 
@@ -3023,23 +3156,33 @@ class EditorView(QWidget):
             except Exception:
                 pass
             self._duplicate_button.setVisible(True)
-            self._refresh_duplicate_button_position()
+            self._refresh_annotation_helper_positions()
+            if isinstance(selected, AnnotationPathItem):
+                self._node_button.setVisible(True)
+                self._node_button.setText("Edit nodes" if selected is not self._node_edit_item else "Exit node edit")
+            else:
+                self._node_button.setVisible(False)
+                self._set_node_edit_target(None)
         else:
             self._duplicate_button.setVisible(False)
+            self._node_button.setVisible(False)
+            self._set_node_edit_target(None)
 
         self._edit_text_button.setEnabled(self._view.has_selected_text())
         self._selection_style_button.setEnabled(selected is not None)
 
     def _handle_selected_item_changed(self) -> None:
-        self._refresh_duplicate_button_position()
+        self._refresh_annotation_helper_positions()
 
-    def _refresh_duplicate_button_position(self) -> None:
+    def _refresh_annotation_helper_positions(self) -> None:
         if not self._duplicate_button.isVisible():
+            self._node_button.setVisible(False)
             return
 
         item = self._tracked_annotation_item or self._view.selected_annotation()
         if item is None:
             self._duplicate_button.setVisible(False)
+            self._node_button.setVisible(False)
             return
 
         scene_rect = item.mapToScene(item.boundingRect()).boundingRect()
@@ -3050,9 +3193,36 @@ class EditorView(QWidget):
         y = max(0, min(int(view_pos.y()), self._view.viewport().height() - self._duplicate_button.height()))
         self._duplicate_button.move(x, y)
 
+        if self._node_button.isVisible():
+            node_x = max(0, min(int(view_pos.x()), self._view.viewport().width() - self._node_button.width()))
+            node_y = max(0, min(int(view_pos.y() + self._duplicate_button.height() + 6), self._view.viewport().height() - self._node_button.height()))
+            self._node_button.move(node_x, node_y)
+
     def _handle_duplicate_selected(self) -> None:
         self._view.duplicate_selected_annotation()
-        self._refresh_duplicate_button_position()
+        self._refresh_annotation_helper_positions()
+
+    def _handle_edit_nodes(self) -> None:
+        selected = self._view.selected_annotation()
+        if not isinstance(selected, AnnotationPathItem):
+            self._set_node_edit_target(None)
+            return
+        if self._node_edit_item is selected:
+            self._set_node_edit_target(None)
+        else:
+            self._set_node_edit_target(selected)
+
+    def _set_node_edit_target(self, item: Optional[AnnotationPathItem]) -> None:
+        if self._node_edit_item and self._node_edit_item is not item:
+            self._node_edit_item.set_edit_mode(False)
+        self._node_edit_item = item
+        if item is not None:
+            item.set_edit_mode(True)
+            self._node_button.setVisible(True)
+            self._node_button.setText("Exit node edit")
+        else:
+            self._node_button.setText("Edit nodes")
+        self._refresh_annotation_helper_positions()
 
     def _open_annotation_presets_dialog(self) -> None:
         tool = self._state.annotations.active_tool
@@ -3097,6 +3267,9 @@ class EditorView(QWidget):
                 outline_width=item._outline_width,
                 shadow_enabled=item._shadow_enabled,
                 shadow_blur=item._shadow_blur,
+                stroke_pattern=getattr(item, "_stroke_pattern", base.stroke_pattern),
+                start_marker=getattr(item, "_start_marker", base.start_marker),
+                end_marker=getattr(item, "_end_marker", base.end_marker),
                 font_family=item._font_family,
                 font_size=item._font_size,
             )
@@ -3107,6 +3280,9 @@ class EditorView(QWidget):
                 fill_alpha=item._fill_alpha,
                 stroke_color=item._stroke_color,
                 stroke_width=item._stroke_width,
+                stroke_pattern=item._stroke_pattern,
+                start_marker=item._start_marker,
+                end_marker=item._end_marker,
                 outline_color=item._outline_color,
                 outline_width=item._outline_width,
                 shadow_enabled=item._shadow_enabled,
@@ -3138,6 +3314,9 @@ class EditorView(QWidget):
                     fill_alpha=updated.fill_alpha if allow_fill else 0.0,
                     stroke_color=updated.stroke_color,
                     stroke_width=updated.stroke_width,
+                    stroke_pattern=updated.stroke_pattern,
+                    start_marker=updated.start_marker,
+                    end_marker=updated.end_marker,
                     outline_color=updated.outline_color,
                     outline_width=updated.outline_width,
                     shadow_enabled=updated.shadow_enabled,
