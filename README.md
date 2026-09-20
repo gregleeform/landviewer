@@ -1,3 +1,7 @@
+> **이 저장소는 보관용입니다.**
+> 후속 프로젝트 [gregleeform/plotscape](https://github.com/gregleeform/plotscape)로
+> 전면 재작성되었습니다 (비공개 저장소). 이곳의 코드는 참고용으로 남겨 둡니다.
+
 <div align="center">
 <img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
 </div>
